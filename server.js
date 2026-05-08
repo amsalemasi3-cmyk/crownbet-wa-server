@@ -41,6 +41,7 @@ client.on('ready', () => {
   isReady = true;
   waClient = client;
   currentQR = null;
+  require('./scheduler');
 });
 
 client.on('disconnected', () => {
