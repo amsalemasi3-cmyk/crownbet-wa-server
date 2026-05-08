@@ -10,8 +10,8 @@ const PORT = process.env.PORT || 3000;
 
 let waClient = null;
 let isReady = false;
+let currentQR = null;
 
-// ── Start WA Client ──
 create({
   sessionId: process.env.WA_SESSION || 'crownbet',
   multiDevice: true,
@@ -24,6 +24,7 @@ create({
   qrTimeout: 0,
   killProcessOnBrowserClose: true,
   throwErrorOnTosBlock: false,
+  useChrome: false,
   chromiumArgs: [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -31,116 +32,58 @@ create({
     '--disable-accelerated-2d-canvas',
     '--no-first-run',
     '--no-zygote',
-    '--disable-gpu'
-  ]
+    '--disable-gpu',
+    '--single-process'
+  ],
+  onQr: (qr) => {
+    currentQR = qr;
+    console.log('QR מוכן — כנס ל /qr');
+  }
 }).then(client => {
   waClient = client;
   isReady = true;
-  console.log('✅ WhatsApp מחובר ומוכן!');
-
+  currentQR = null;
+  console.log('WhatsApp מחובר!');
   client.onStateChanged(state => {
-    console.log('WA State:', state);
-    if (state === 'CONFLICT' || state === 'UNLAUNCHED') {
-      client.forceRefocus();
-    }
+    if (state === 'CONFLICT' || state === 'UNLAUNCHED') client.forceRefocus();
   });
-
 }).catch(err => {
-  console.error('❌ שגיאה בהפעלת WhatsApp:', err.message);
-});
-
-// ── ROUTES ──
-
-// Status check
-app.get('/api/status', (req, res) => {
-  res.json({
-    ready: isReady,
-    message: isReady ? 'WhatsApp מחובר' : 'ממתין לחיבור...'
-  });
-});
-
-// Get session info
-app.get('/api/getSessionInfo', (req, res) => {
-  res.json({ ready: isReady, session: process.env.WA_SESSION || 'crownbet' });
-});
-
-// Send text message
-app.post('/api/sendText', async (req, res) => {
-  if (!isReady || !waClient) {
-    return res.status(503).json({ error: 'WhatsApp לא מחובר עדיין' });
-  }
-
-  const { chatId, content } = req.body;
-
-  if (!chatId || !content) {
-    return res.status(400).json({ error: 'חסר chatId או content' });
-  }
-
-  try {
-    await waClient.sendText(chatId, content);
-    console.log(`✅ הודעה נשלחה ל-${chatId}`);
-    res.json({ success: true, message: 'הודעה נשלחה!' });
-  } catch (err) {
-    console.error('❌ שגיאה בשליחה:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Send image with caption
-app.post('/api/sendImage', async (req, res) => {
-  if (!isReady || !waClient) {
-    return res.status(503).json({ error: 'WhatsApp לא מחובר עדיין' });
-  }
-
-  const { chatId, url, caption } = req.body;
-
-  if (!chatId || !url) {
-    return res.status(400).json({ error: 'חסר chatId או url' });
-  }
-
-  try {
-    await waClient.sendImage(chatId, url, 'raffle', caption || '');
-    console.log(`✅ תמונה נשלחה ל-${chatId}`);
-    res.json({ success: true, message: 'תמונה נשלחה!' });
-  } catch (err) {
-    console.error('❌ שגיאה בשליחת תמונה:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get all groups
-app.get('/api/getGroups', async (req, res) => {
-  if (!isReady || !waClient) {
-    return res.status(503).json({ error: 'WhatsApp לא מחובר' });
-  }
-  try {
-    const chats = await waClient.getAllGroups();
-    const groups = chats.map(g => ({ id: g.id, name: g.name }));
-    res.json({ groups });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// QR code endpoint (for display)
-app.get('/qr', (req, res) => {
-  res.send(`
-    <html dir="rtl">
-    <head><meta charset="utf-8"><title>CrownBet QR</title></head>
-    <body style="background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem">
-      <h1 style="color:#f5c842">👑 CrownBet WA Server</h1>
-      <p>סטטוס: ${isReady ? '✅ מחובר!' : '⏳ ממתין לסריקת QR...'}</p>
-      <p style="color:#7070a0;font-size:14px">בדוק את הלוגים ב-Railway לסריקת ה-QR code</p>
-      <br>
-      <a href="/api/status" style="color:#f5c842">בדוק סטטוס</a>
-    </body>
-    </html>
-  `);
+  console.error('שגיאה:', err.message);
 });
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
-app.listen(PORT, () => {
-  console.log(`🚀 שרת פועל על פורט ${PORT}`);
-  console.log(`📱 כנס ל-/qr לבדיקת סטטוס`);
+app.get('/qr', (req, res) => {
+  if (isReady) {
+    return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן!</div></body></html>`);
+  }
+  if (currentQR) {
+    return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="10"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:280px}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><p style="color:#7070a0">וואטסאפ → שלוש נקודות → מכשירים מקושרים → סרוק</p><img src="${currentQR}" /><p style="color:#7070a0;font-size:12px;margin-top:1rem">מתרענן כל 10 שניות</p></body></html>`);
+  }
+  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל... מתרענן אוטומטית</p></body></html>`);
 });
+
+app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
+app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
+
+app.post('/api/sendText', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  const { chatId, content } = req.body;
+  try { await waClient.sendText(chatId, content); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/sendImage', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  const { chatId, url, caption } = req.body;
+  try { await waClient.sendImage(chatId, url, 'raffle', caption || ''); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/getGroups', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  try { const chats = await waClient.getAllGroups(); res.json({ groups: chats.map(g => ({ id: g.id, name: g.name })) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.listen(PORT, () => console.log(`שרת פועל על פורט ${PORT}`));
