@@ -165,7 +165,7 @@ cron.schedule('0 20 * * *', async () => {
 }, { timezone: 'Asia/Jerusalem' });
 
 // 00:00 — הודעת לילה
-cron.schedule('55 21 * * *', async () => {
+cron.schedule('10 22 * * *', async () => {
   console.log('⏰ 00:00 — הודעת לילה');
   const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayMidnight);
   await sendText(msg);
