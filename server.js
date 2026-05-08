@@ -105,4 +105,11 @@ app.get('/api/getGroups', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`🚀 שרת פועל על פורט ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 שרת פועל על פורט ${PORT}`);
+  setTimeout(() => {
+    require('./scheduler');
+    console.log('📅 תזמון אוטומטי פעיל!');
+  }, 5000);
+});
+
