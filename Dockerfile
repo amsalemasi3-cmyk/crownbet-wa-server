@@ -1,11 +1,8 @@
 FROM node:18-slim
 
-# Install Chromium dependencies
 RUN apt-get update && apt-get install -y \
     chromium \
-    chromium-driver \
     fonts-liberation \
-    fonts-noto-color-emoji \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -22,7 +19,6 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
-    wget \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
