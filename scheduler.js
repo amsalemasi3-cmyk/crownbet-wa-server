@@ -11,7 +11,7 @@ const SUPABASE_URL = 'https://oxraakhcpvthlvjvapay.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94cmFha2hjcHZ0aGx2anZhcGF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzY4MTUsImV4cCI6MjA5MzY1MjgxNX0.dftK8Qb9zjzwEVGRLv4Q54Pqn2SLrzOxUqydIYf3Xd8';
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
 
-// ── האם עכשיו שבת? ──
+// ── האם עכשיו שבת? (שישי 17:00 עד שבת 20:00) ──
 function isShabbat() {
   const now = new Date();
   const day = now.getDay();
@@ -21,43 +21,52 @@ function isShabbat() {
   return false;
 }
 
+// ── האם עכשיו מוצאי שבת? (שבת 20:00 עד 23:59) ──
+function isMoatzashLocal() {
+  const now = new Date();
+  const day = now.getDay();
+  const hour = now.getHours();
+  if (day === 6 && hour >= 20) return true;
+  return false;
+}
+
 // ── שלח הודעת טקסט ──
 async function sendText(text) {
-  if (isShabbat()) {
-    console.log('🕌 שבת — לא שולחים הודעות');
+  // מוצ"ש עובר על שבת
+  if (isShabbat() && !isMoatzashLocal()) {
+    console.log('🕌 שבת — לא שולחים');
     return;
   }
   try {
-    await axios.post(`${SERVER_URL}/api/sendText`, {
-      chatId: GROUP_ID,
-      content: text
-    });
+    await axios.post(`${SERVER_URL}/api/sendText`, { chatId: GROUP_ID, content: text });
     console.log('✅ הודעה נשלחה:', text.substring(0, 40) + '...');
-  } catch (err) {
-    console.error('❌ שגיאה בשליחת הודעה:', err.message);
-  }
+  } catch (err) { console.error('❌ שגיאה:', err.message); }
 }
 
-// ── שלח הגרלה ──
+// ── שלח הגרלה ושמור messageId ──
 async function sendRaffle(raffle) {
-  if (isShabbat()) {
+  if (isShabbat() && !isMoatzashLocal()) {
     console.log('🕌 שבת — לא שולחים הגרלות');
     return false;
   }
   try {
+    let response;
     if (raffle.image_url) {
-      await axios.post(`${SERVER_URL}/api/sendImage`, {
+      response = await axios.post(`${SERVER_URL}/api/sendImage`, {
         chatId: GROUP_ID,
         url: raffle.image_url,
-        caption: raffle.raffle_text || ''
+        caption: raffle.raffle_text || '',
+        raffleId: raffle.id
       });
     } else {
-      await axios.post(`${SERVER_URL}/api/sendText`, {
+      response = await axios.post(`${SERVER_URL}/api/sendTextWithId`, {
         chatId: GROUP_ID,
-        content: raffle.raffle_text || ''
+        content: raffle.raffle_text || '',
+        raffleId: raffle.id
       });
     }
     console.log('✅ הגרלה נשלחה:', raffle.match_title);
+    watchRaffleForFinish(raffle.id);
     return true;
   } catch (err) {
     console.error('❌ שגיאה בשליחת הגרלה:', err.message);
@@ -65,7 +74,7 @@ async function sendRaffle(raffle) {
   }
 }
 
-// ── שלח תוצאות (רק results) ──
+// ── שלח תוצאות ──
 async function sendResults(raffle) {
   try {
     if (raffle.results_image_url) {
@@ -81,17 +90,51 @@ async function sendResults(raffle) {
       });
     }
     console.log('✅ תוצאות נשלחו:', raffle.match_title);
-  } catch (err) {
-    console.error('❌ שגיאה בשליחת תוצאות:', err.message);
-  }
+  } catch (err) { console.error('❌ שגיאה בשליחת תוצאות:', err.message); }
+}
+
+// ── עקוב אחרי הגרלה עד שתסתיים ──
+function watchRaffleForFinish(raffleId) {
+  console.log(`👀 מעקב אחרי הגרלה ${raffleId}...`);
+  const checkInterval = setInterval(async () => {
+    try {
+      const res = await axios.get(
+        `${SUPABASE_URL}/rest/v1/raffles?id=eq.${raffleId}&select=is_finished,results`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const raffle = res.data[0];
+      if (raffle && raffle.is_finished && raffle.results) {
+        clearInterval(checkInterval);
+        console.log(`🏁 הגרלה ${raffleId} הסתיימה! מחפש זוכים...`);
+        setTimeout(async () => {
+          try {
+            const { findWinners } = require('./winner-finder');
+            const msgRes = await axios.get(`${SERVER_URL}/api/getRaffleMessageId?raffleId=${raffleId}`);
+            const messageId = msgRes.data.messageId;
+            if (messageId) {
+              await findWinners(raffleId, messageId);
+            } else {
+              console.log('לא נמצא messageId להגרלה');
+            }
+          } catch (err) {
+            console.error('שגיאה בחיפוש זוכים:', err.message);
+          }
+        }, 2 * 60 * 1000);
+      }
+    } catch (err) {
+      console.error('שגיאה בבדיקת סיום הגרלה:', err.message);
+    }
+  }, 5 * 60 * 1000);
+  setTimeout(() => clearInterval(checkInterval), 12 * 60 * 60 * 1000);
 }
 
 // ── שלוף הגרלות היום ──
 async function getTodayRaffles() {
   const today = new Date().toISOString().split('T')[0];
-  const res = await axios.get(`${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${today}&order=created_at.asc`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-  });
+  const res = await axios.get(
+    `${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${today}&order=created_at.asc`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
   return res.data;
 }
 
@@ -100,9 +143,10 @@ async function getYesterdayResults() {
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const dateStr = yesterday.toISOString().split('T')[0];
-  const res = await axios.get(`${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${dateStr}&results=not.is.null&is_finished=eq.true`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-  });
+  const res = await axios.get(
+    `${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${dateStr}&results=not.is.null&is_finished=eq.true`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
   return res.data;
 }
 
@@ -144,7 +188,7 @@ cron.schedule('0 11 * * *', async () => {
 // 12:00 — הודעת צהריים
 cron.schedule('0 12 * * *', async () => {
   console.log('⏰ 12:00 — הודעת צהריים');
-  if (isMoatzash()) { await sendText(getRandom(motzashMessages)); return; }
+  if (isMoatzashLocal()) { await sendText(getRandom(motzashMessages)); return; }
   const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayNoon);
   await sendText(msg);
 }, { timezone: 'Asia/Jerusalem' });
@@ -165,8 +209,9 @@ cron.schedule('0 18 * * *', async () => {
 
 // 20:00 — הגרלה שנייה / מוצאי שבת
 cron.schedule('0 20 * * *', async () => {
-  console.log('⏰ 20:00 — הגרלה שנייה');
-  if (isMoatzash()) {
+  console.log('⏰ 20:00 — הגרלה שנייה / מוצאי שבת');
+  if (isMoatzashLocal()) {
+    console.log('✨ מוצאי שבת — שולח הודעת שבוע טוב');
     await sendText(getRandom(motzashMessages));
     return;
   }
@@ -178,8 +223,6 @@ cron.schedule('0 20 * * *', async () => {
         await sendText(getRandom(afterRaffleMessages));
       }, 60 * 60 * 1000);
     }
-  } else if (raffles.length === 1) {
-    console.log('רק הגרלה אחת היום');
   }
 }, { timezone: 'Asia/Jerusalem' });
 
