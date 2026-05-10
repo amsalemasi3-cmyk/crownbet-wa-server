@@ -9,7 +9,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   makeInMemoryStore,
-} = require('@whiskeysockets/baileys');
+} = require('@whiskeysockets/baileys/lib/Store/make-in-memory-store').default;
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
