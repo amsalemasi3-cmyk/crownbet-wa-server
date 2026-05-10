@@ -2,17 +2,14 @@ const express = require('express');
 const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
+const axios = require('axios');
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  fetchLatestBaileysVersion,
   makeInMemoryStore,
-  jidDecode,
-  proto,
-  getContentType
-} = require('@whiskeysockets/baileys');
+} = require('baileys');
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
@@ -26,22 +23,18 @@ let currentQR = null;
 let store = null;
 
 const raffleMessages = {};
-
 const logger = pino({ level: 'silent' });
 
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-  const { version } = await fetchLatestBaileysVersion();
 
   store = makeInMemoryStore({ logger });
 
   const sock = makeWASocket({
-    version,
     logger,
     auth: state,
     printQRInTerminal: false,
     browser: ['CrownBet', 'Chrome', '120.0.0'],
-    generateHighQualityLinkPreview: false,
   });
 
   store.bind(sock.ev);
@@ -68,25 +61,20 @@ async function startBaileys() {
       console.log('🔄 מתחבר מחדש...', shouldReconnect);
       isReady = false;
       waSocket = null;
-      if (shouldReconnect) {
-        setTimeout(startBaileys, 3000);
-      }
+      if (shouldReconnect) setTimeout(startBaileys, 3000);
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
-
   return sock;
 }
 
 startBaileys();
 
-// ── ROUTES ──
-
 app.get('/', (req, res) => res.redirect('/qr'));
 
 app.get('/qr', (req, res) => {
-  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!<br><small style="font-size:14px;margin-top:8px;display:block">התזמון האוטומטי פעיל 📅</small></div></body></html>`);
+  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>`);
   if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><p style="color:#7070a0">וואטסאפ → שלוש נקודות ⋮ → מכשירים מקושרים → סרוק</p><br><img src="${currentQR}" /></body></html>`);
   return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל...</p></body></html>`);
 });
@@ -94,7 +82,6 @@ app.get('/qr', (req, res) => {
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
 
-// ── שלח טקסט ──
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
@@ -104,19 +91,13 @@ app.post('/api/sendText', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── שלח תמונה + שמור messageId ──
 app.post('/api/sendImage', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, url, caption, raffleId } = req.body;
   try {
-    const axios = require('axios');
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data);
-    const sent = await waSocket.sendMessage(chatId, {
-      image: buffer,
-      caption: caption || '',
-      jpegThumbnail: null,
-    });
+    const sent = await waSocket.sendMessage(chatId, { image: buffer, caption: caption || '' });
     if (raffleId) {
       raffleMessages[raffleId] = sent.key.id;
       console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
@@ -125,7 +106,6 @@ app.post('/api/sendImage', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── שלח טקסט + שמור messageId ──
 app.post('/api/sendTextWithId', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content, raffleId } = req.body;
@@ -139,15 +119,14 @@ app.post('/api/sendTextWithId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── שלוף תגובות על הודעה ──
 app.get('/api/getMessageReplies', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { messageId } = req.query;
   if (!messageId) return res.status(400).json({ error: 'חסר messageId' });
   try {
     const GROUP_ID = process.env.GROUP_ID;
-    const msgs = await store.loadMessages(GROUP_ID, 1000, { before: { id: messageId, fromMe: false } });
-    const replies = (msgs || []).filter(m => 
+    const msgs = await store.loadMessages(GROUP_ID, 1000);
+    const replies = (msgs || []).filter(m =>
       m.message?.extendedTextMessage?.contextInfo?.stanzaId === messageId ||
       m.message?.imageMessage?.contextInfo?.stanzaId === messageId
     ).map(m => ({
@@ -160,13 +139,11 @@ app.get('/api/getMessageReplies', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── קבל messageId של הגרלה ──
 app.get('/api/getRaffleMessageId', (req, res) => {
   const { raffleId } = req.query;
   res.json({ messageId: raffleMessages[raffleId] || null });
 });
 
-// ── זיהוי זוכים ──
 app.post('/api/findWinners', async (req, res) => {
   const { raffleId } = req.body;
   if (!raffleId) return res.status(400).json({ error: 'חסר raffleId' });
@@ -179,7 +156,6 @@ app.post('/api/findWinners', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── רשימת קבוצות ──
 app.get('/api/getGroups', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   try {
