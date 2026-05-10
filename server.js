@@ -4,7 +4,7 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-const {
+const { 
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
