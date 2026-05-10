@@ -4,19 +4,23 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
+// ייבוא בסיסי של Baileys
 const { 
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
 } = require('@whiskeysockets/baileys');
 
-// הדרך הנכונה לייבא את הסטור בגרסה המעודכנת
+// התיקון הסופי לייבוא ה-Store בגרסאות החדשות
 const makeInMemoryStore = require('@whiskeysockets/baileys/lib/Store/make-in-memory-store').default;
 
 const app = express();
+
+// הגדרת CORS מורחבת למניעת חסימות
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
 
+// Railway דורש האזנה ל-0.0.0.0 כדי שהשרת יהיה נגיש
 const PORT = process.env.PORT || 3000;
 
 let waSocket = null;
@@ -29,33 +33,42 @@ const logger = pino({ level: 'silent' });
 
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  
+  // אתחול הסטור עם התיקון החדש
   store = makeInMemoryStore({ logger });
 
   const sock = makeWASocket({
     logger,
     auth: state,
     printQRInTerminal: false,
+    // הגדרת דפדפן כדי למנוע ניתוקים מהירים
     browser: ['CrownBet', 'Chrome', '120.0.0'],
   });
 
+  // חיבור הסטור לאירועי הסוקט
   store.bind(sock.ev);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
+    
     if (qr) {
       console.log('📱 QR מוכן — כנס ל /qr');
       currentQR = await qrcode.toDataURL(qr);
       isReady = false;
     }
+    
     if (connection === 'open') {
       console.log('✅ WhatsApp מחובר!');
       isReady = true;
       waSocket = sock;
       currentQR = null;
-      require('./scheduler');
+      // טעינת מתזמן המשימות (אם קיים)
+      try { require('./scheduler'); } catch (e) { console.log('Scheduler not found, skipping...'); }
     }
+    
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('❌ חיבור נסגר, מנסה להתחבר מחדש:', shouldReconnect);
       isReady = false;
       waSocket = null;
       if (shouldReconnect) setTimeout(startBaileys, 3000);
@@ -66,7 +79,10 @@ async function startBaileys() {
   return sock;
 }
 
+// הפעלת הבוט
 startBaileys();
+
+// --- נתיבי API ---
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
@@ -77,7 +93,6 @@ app.get('/qr', (req, res) => {
 });
 
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
-app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
 
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
@@ -95,40 +110,23 @@ app.post('/api/sendImage', async (req, res) => {
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data);
     const sent = await waSocket.sendMessage(chatId, { image: buffer, caption: caption || '' });
-    if (raffleId) {
-      raffleMessages[raffleId] = sent.key.id;
-      console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
-    }
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/sendTextWithId', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  const { chatId, content, raffleId } = req.body;
-  try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
-    if (raffleId) {
-      raffleMessages[raffleId] = sent.key.id;
-      console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
-    }
+    if (raffleId) raffleMessages[raffleId] = sent.key.id;
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/getMessageReplies', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  if (!isReady || !waSocket || !store) return res.status(503).json({ error: 'שרת לא מוכן' });
   const { messageId } = req.query;
   if (!messageId) return res.status(400).json({ error: 'חסר messageId' });
   try {
     const GROUP_ID = process.env.GROUP_ID;
-    const msgs = await store.loadMessages(GROUP_ID, 1000);
+    const msgs = await store.loadMessages(GROUP_ID, 100);
     const replies = (msgs || []).filter(m =>
       m.message?.extendedTextMessage?.contextInfo?.stanzaId === messageId ||
       m.message?.imageMessage?.contextInfo?.stanzaId === messageId
     ).map(m => ({
-      senderName: m.pushName || m.key.participant || m.key.remoteJid,
-      senderId: m.key.participant || m.key.remoteJid,
+      senderName: m.pushName || m.key.participant,
       body: m.message?.extendedTextMessage?.text || m.message?.conversation || '',
       timestamp: m.messageTimestamp
     }));
@@ -136,32 +134,7 @@ app.get('/api/getMessageReplies', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/getRaffleMessageId', (req, res) => {
-  const { raffleId } = req.query;
-  res.json({ messageId: raffleMessages[raffleId] || null });
-});
-
-app.post('/api/findWinners', async (req, res) => {
-  const { raffleId } = req.body;
-  if (!raffleId) return res.status(400).json({ error: 'חסר raffleId' });
-  try {
-    const messageId = raffleMessages[raffleId];
-    if (!messageId) return res.status(404).json({ error: 'לא נמצא messageId' });
-    const { findWinners } = require('./winner-finder');
-    const result = await findWinners(raffleId, messageId);
-    res.json({ success: true, result });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/getGroups', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  try {
-    const groups = await waSocket.groupFetchAllParticipating();
-    const list = Object.values(groups).map(g => ({ id: g.id, name: g.subject }));
-    res.json({ groups: list });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 שרת פועל על פורט ${PORT}`);
+// האזנה לפורט - הוספת 0.0.0.0 קריטית ל-Railway
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 שרת CrownBet פועל על פורט ${PORT}`);
 });
