@@ -9,7 +9,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   makeInMemoryStore,
-} = require('baileys');
+} = require('@whiskeysockets/baileys');
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
@@ -27,7 +27,6 @@ const logger = pino({ level: 'silent' });
 
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
-
   store = makeInMemoryStore({ logger });
 
   const sock = makeWASocket({
@@ -41,13 +40,11 @@ async function startBaileys() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
     if (qr) {
       console.log('📱 QR מוכן — כנס ל /qr');
       currentQR = await qrcode.toDataURL(qr);
       isReady = false;
     }
-
     if (connection === 'open') {
       console.log('✅ WhatsApp מחובר!');
       isReady = true;
@@ -55,10 +52,8 @@ async function startBaileys() {
       currentQR = null;
       require('./scheduler');
     }
-
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('🔄 מתחבר מחדש...', shouldReconnect);
       isReady = false;
       waSocket = null;
       if (shouldReconnect) setTimeout(startBaileys, 3000);
