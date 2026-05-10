@@ -12,6 +12,7 @@
     "qrcode": "^1.5.3",
     "node-cron": "^3.0.3",
     "axios": "^1.6.0",
-    "pino": "^9.0.0"
+    "pino": "^9.0.0",
+    "https-proxy-agent": "^7.0.4"
   }
 }
