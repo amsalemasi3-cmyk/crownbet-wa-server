@@ -1,201 +1,236 @@
-const express = require('express');
-const cors = require('cors');
-const qrcode = require('qrcode');
-const pino = require('pino');
+const cron = require('node-cron');
 const axios = require('axios');
-
 const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-} = require('@whiskeysockets/baileys');
+  GROUP_ID, morningMessages, afterRaffleMessages,
+  weekdayNoon, weekdayAfternoon, weekdayEvening,
+  weekdayLateEvening, weekdayMidnight, lateNightMessages,
+  veryLateNightMessages, weekendMessages, motzashMessages,
+  getRandom, randomDelay, isWeekend, isMoatzash
+} = require('./messages');
 
-const app = express();
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
-app.use(express.json());
+const SUPABASE_URL = 'https://oxraakhcpvthlvjvapay.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94cmFha2hjcHZ0aGx2anZhcGF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzY4MTUsImV4cCI6MjA5MzY1MjgxNX0.dftK8Qb9zjzwEVGRLv4Q54Pqn2SLrzOxUqydIYf3Xd8';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
 
-const PORT = process.env.PORT || 8080;
+// ── האם עכשיו שבת? ──
+function isShabbat() {
+  const now = new Date();
+  const day = now.getDay();
+  const hour = now.getHours();
+  if (day === 5 && hour >= 17) return true;
+  if (day === 6 && hour < 20) return true;
+  return false;
+}
 
-let waSocket = null;
-let isReady = false;
-let currentQR = null;
-let isConnecting = false;
+// ── שלח עם עיכוב אקראי (נראה טבעי) ──
+async function sendWithDelay(fn, maxMinutes = 10) {
+  const delay = randomDelay(maxMinutes);
+  await new Promise(resolve => setTimeout(resolve, delay));
+  await fn();
+}
 
-const raffleMessages = {};
-const logger = pino({ level: 'silent' });
-
-async function startBaileys() {
-  if (isConnecting) return;
-  isConnecting = true;
-  console.log('🔄 מתחיל Baileys...');
-
+// ── שלח הודעת טקסט ──
+async function sendText(text) {
+  if (isShabbat() && !isMoatzash()) {
+    console.log('🕌 שבת — לא שולחים');
+    return;
+  }
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    await axios.post(`${SERVER_URL}/api/sendText`, { chatId: GROUP_ID, content: text });
+    console.log('✅ הודעה נשלחה:', text.substring(0, 40) + '...');
+  } catch (err) { console.error('❌ שגיאה:', err.message); }
+}
 
-    const sock = makeWASocket({
-      logger,
-      auth: state,
-      // הסרנו printQRInTerminal - deprecated בגרסאות חדשות
-      browser: ['CrownBet', 'Chrome', '120.0.0'],
-      syncFullHistory: false,
-      connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: 60_000,
-      keepAliveIntervalMs: 10_000,
-    });
-
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        console.log('📱 QR התקבל — כנס ל /qr');
-        try {
-          currentQR = await qrcode.toDataURL(qr);
-          isReady = false;
-        } catch (e) {
-          console.error('❌ שגיאה ביצירת QR image:', e.message);
-        }
-      }
-
-      if (connection === 'open') {
-        console.log('✅ WhatsApp מחובר!');
-        isReady = true;
-        waSocket = sock;
-        currentQR = null;
-        isConnecting = false;
-
-        try {
-          console.log('📅 מפעיל Scheduler...');
-          require('./schedule');
-        } catch (e) {
-          console.error('❌ שגיאה בטעינת Schedule:', e.message);
-        }
-      }
-
-      if (connection === 'close') {
-        const code = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = code !== DisconnectReason.loggedOut;
-
-        console.log(`🔌 חיבור נסגר — קוד: ${code}`);
-        isReady = false;
-        waSocket = null;
-        currentQR = null;
-        isConnecting = false;
-
-        if (shouldReconnect) {
-          console.log('🔄 מתחבר מחדש בעוד 5 שניות...');
-          setTimeout(startBaileys, 5000);
-        } else {
-          console.log('🚪 נותקת מ-WhatsApp. מחק auth_info ועשה redeploy.');
-        }
-      }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
+// ── שלח הגרלה ושמור messageId ──
+async function sendRaffle(raffle) {
+  if (isShabbat() && !isMoatzash()) {
+    console.log('🕌 שבת — לא שולחים הגרלות');
+    return false;
+  }
+  try {
+    let response;
+    if (raffle.image_url) {
+      response = await axios.post(`${SERVER_URL}/api/sendImage`, {
+        chatId: GROUP_ID,
+        url: raffle.image_url,
+        caption: raffle.raffle_text || '',
+        raffleId: raffle.id
+      });
+    } else {
+      response = await axios.post(`${SERVER_URL}/api/sendTextWithId`, {
+        chatId: GROUP_ID,
+        content: raffle.raffle_text || '',
+        raffleId: raffle.id
+      });
+    }
+    console.log('✅ הגרלה נשלחה:', raffle.match_title);
+    watchRaffleForFinish(raffle.id);
+    return true;
   } catch (err) {
-    console.error('❌ שגיאה קריטית:', err.message);
-    isConnecting = false;
-    setTimeout(startBaileys, 5000);
+    console.error('❌ שגיאה בשליחת הגרלה:', err.message);
+    return false;
   }
 }
 
-startBaileys();
-
-// ── ראוט ראשי ──
-app.get('/', (req, res) => res.redirect('/qr'));
-
-// ── סטטוס JSON ──
-app.get('/status', (req, res) => {
-  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
-});
-
-// ── דף QR ──
-app.get('/qr', (req, res) => {
-  if (isReady) {
-    return res.send(`
-      <html dir="rtl"><head><meta charset="utf-8"><title>CrownBet ✅</title>
-      <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
-      h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;
-      display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head>
-      <body><h1>👑 CrownBet WA Server</h1>
-      <div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>
-    `);
-  }
-
-  if (currentQR) {
-    return res.send(`
-      <html dir="rtl"><head><meta charset="utf-8">
-      <meta http-equiv="refresh" content="30">
-      <title>סרוק QR</title>
-      <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}
-      h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}
-      p{color:#7070a0}</style></head>
-      <body><h1>👑 CrownBet — סרוק QR</h1>
-      <p>וואטסאפ ← שלוש נקודות ⋮ ← מכשירים מקושרים ← קשר מכשיר ← סרוק</p>
-      <br><img src="${currentQR}" />
-      <p style="margin-top:1rem;font-size:0.85rem">הדף מתרענן כל 30 שניות</p>
-      </body></html>
-    `);
-  }
-
-  return res.send(`
-    <html dir="rtl"><head><meta charset="utf-8">
-    <meta http-equiv="refresh" content="4">
-    <title>CrownBet</title>
-    <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
-    h1{color:#f5c842}</style></head>
-    <body><h1>👑 CrownBet WA Server</h1>
-    <p style="color:#7070a0">⏳ מאתחל חיבור... הדף יתרענן אוטומטית</p>
-    </body></html>
-  `);
-});
-
-// ── שלח טקסט ──
-app.post('/api/sendText', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  const { chatId, content } = req.body;
+// ── שלח תוצאות ──
+async function sendResults(raffle) {
   try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (raffle.results_image_url) {
+      await axios.post(`${SERVER_URL}/api/sendImage`, {
+        chatId: GROUP_ID,
+        url: raffle.results_image_url,
+        caption: raffle.results || ''
+      });
+    } else {
+      await axios.post(`${SERVER_URL}/api/sendText`, {
+        chatId: GROUP_ID,
+        content: raffle.results || ''
+      });
+    }
+    console.log('✅ תוצאות נשלחו:', raffle.match_title);
+  } catch (err) { console.error('❌ שגיאה:', err.message); }
+}
+
+// ── עקוב אחרי הגרלה ──
+function watchRaffleForFinish(raffleId) {
+  console.log(`👀 מעקב אחרי הגרלה ${raffleId}...`);
+  const checkInterval = setInterval(async () => {
+    try {
+      const res = await axios.get(
+        `${SUPABASE_URL}/rest/v1/raffles?id=eq.${raffleId}&select=is_finished,results`,
+        { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+      );
+      const raffle = res.data[0];
+      if (raffle && raffle.is_finished && raffle.results) {
+        clearInterval(checkInterval);
+        console.log(`🏁 הגרלה ${raffleId} הסתיימה!`);
+        setTimeout(async () => {
+          try {
+            const { findWinners } = require('./winner-finder');
+            const msgRes = await axios.get(`${SERVER_URL}/api/getRaffleMessageId?raffleId=${raffleId}`);
+            const messageId = msgRes.data.messageId;
+            if (messageId) await findWinners(raffleId, messageId);
+          } catch (err) { console.error('שגיאה בחיפוש זוכים:', err.message); }
+        }, 2 * 60 * 1000);
+      }
+    } catch (err) { console.error('שגיאה בבדיקה:', err.message); }
+  }, 5 * 60 * 1000);
+  setTimeout(() => clearInterval(checkInterval), 12 * 60 * 60 * 1000);
+}
+
+// ── שלוף הגרלות היום ──
+async function getTodayRaffles() {
+  const today = new Date().toISOString().split('T')[0];
+  const res = await axios.get(
+    `${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${today}&order=created_at.asc`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
+  return res.data;
+}
+
+// ── שלוף תוצאות אתמול ──
+async function getYesterdayResults() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = yesterday.toISOString().split('T')[0];
+  const res = await axios.get(
+    `${SUPABASE_URL}/rest/v1/raffles?raffle_date=eq.${dateStr}&results=not.is.null&is_finished=eq.true`,
+    { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+  );
+  return res.data;
+}
+
+// ══════════════════════════════════════
+// ── לוח הזמנים (עם עיכוב אקראי עד 10 דקות) ──
+// ══════════════════════════════════════
+
+// 09:00 — תוצאות אתמול (ללא עיכוב)
+cron.schedule('0 9 * * *', async () => {
+  console.log('⏰ 09:00 — תוצאות אתמול');
+  const results = await getYesterdayResults();
+  if (!results.length) { console.log('אין תוצאות'); return; }
+  for (const r of results) {
+    await sendResults(r);
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
-});
+}, { timezone: 'Asia/Jerusalem' });
 
-// ── שלח טקסט + שמור raffleId ──
-app.post('/api/sendTextWithId', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  const { chatId, content, raffleId } = req.body;
-  try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
-    if (raffleId) raffleMessages[raffleId] = sent.key.id;
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// 10:00 — הודעת בוקר
+cron.schedule('0 10 * * *', async () => {
+  console.log('⏰ 10:00 — הודעת בוקר');
+  sendWithDelay(() => sendText(getRandom(morningMessages)));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 11:00 — הגרלה ראשונה (ללא עיכוב)
+cron.schedule('0 11 * * *', async () => {
+  console.log('⏰ 11:00 — הגרלה ראשונה');
+  const raffles = await getTodayRaffles();
+  if (raffles.length > 0) {
+    const sent = await sendRaffle(raffles[0]);
+    if (sent) setTimeout(async () => { await sendText(getRandom(afterRaffleMessages)); }, 60 * 60 * 1000);
   }
-});
+}, { timezone: 'Asia/Jerusalem' });
 
-// ── שלח תמונה ──
-app.post('/api/sendImage', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  const { chatId, url, caption, raffleId } = req.body;
-  try {
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(response.data);
-    const sent = await waSocket.sendMessage(chatId, { image: buffer, caption: caption || '' });
-    if (raffleId) raffleMessages[raffleId] = sent.key.id;
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// 12:00 — הודעת צהריים
+cron.schedule('0 12 * * *', async () => {
+  console.log('⏰ 12:00 — הודעת צהריים');
+  if (isMoatzash()) { sendWithDelay(() => sendText(getRandom(motzashMessages))); return; }
+  const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayNoon);
+  sendWithDelay(() => sendText(msg));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 15:00 — הודעת אחר הצהריים
+cron.schedule('0 15 * * *', async () => {
+  console.log('⏰ 15:00 — הודעת אחר הצהריים');
+  const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayAfternoon);
+  sendWithDelay(() => sendText(msg));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 18:00 — הודעת ערב
+cron.schedule('0 18 * * *', async () => {
+  console.log('⏰ 18:00 — הודעת ערב');
+  const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayEvening);
+  sendWithDelay(() => sendText(msg));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 20:00 — הגרלה שנייה / מוצאי שבת
+cron.schedule('0 20 * * *', async () => {
+  console.log('⏰ 20:00 — הגרלה שנייה / מוצאי שבת');
+  if (isMoatzash()) {
+    sendWithDelay(() => sendText(getRandom(motzashMessages)));
+    return;
   }
-});
+  const raffles = await getTodayRaffles();
+  if (raffles.length > 1) {
+    const sent = await sendRaffle(raffles[1]);
+    if (sent) setTimeout(async () => { await sendText(getRandom(afterRaffleMessages)); }, 60 * 60 * 1000);
+  }
+}, { timezone: 'Asia/Jerusalem' });
 
-// ── קבל messageId של הגרלה ──
-app.get('/api/getRaffleMessageId', (req, res) => {
-  const { raffleId } = req.query;
-  res.json({ messageId: raffleMessages[raffleId] || null });
-});
+// 22:00 — הודעת לילה
+cron.schedule('0 22 * * *', async () => {
+  console.log('⏰ 22:00 — הודעת לילה');
+  const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayLateEvening);
+  sendWithDelay(() => sendText(msg));
+}, { timezone: 'Asia/Jerusalem' });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 שרת פועל על פורט ${PORT}`);
-});
+// 00:00 — הודעת חצות
+cron.schedule('0 0 * * *', async () => {
+  console.log('⏰ 00:00 — הודעת חצות');
+  const msg = isWeekend() ? getRandom(weekendMessages) : getRandom(weekdayMidnight);
+  sendWithDelay(() => sendText(msg));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 01:00 — הודעת לילה מאוחר
+cron.schedule('0 1 * * *', async () => {
+  console.log('⏰ 01:00 — הודעת לילה מאוחר');
+  sendWithDelay(() => sendText(getRandom(lateNightMessages)));
+}, { timezone: 'Asia/Jerusalem' });
+
+// 02:00 — הודעת שעתיים לפנות בוקר
+cron.schedule('0 2 * * *', async () => {
+  console.log('⏰ 02:00 — הודעת שעתיים');
+  sendWithDelay(() => sendText(getRandom(veryLateNightMessages)));
+}, { timezone: 'Asia/Jerusalem' });
+
+console.log('📅 תזמון אוטומטי פעיל — שעון ישראל');
