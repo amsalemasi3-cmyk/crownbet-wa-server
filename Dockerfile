@@ -12,9 +12,10 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" && \
-    git config --global url."https://github.com/".insteadOf "git@github.com:" && \
-    npm install --legacy-peer-deps
+ENV npm_config_prefer_offline=false
+RUN npm config set git-tag-version false && \
+    npm install --legacy-peer-deps --ignore-scripts && \
+    npm rebuild
 
 COPY . .
 
