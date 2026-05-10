@@ -4,7 +4,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
@@ -13,8 +13,7 @@ let waClient = null;
 let isReady = false;
 let currentQR = null;
 
-// שמירת messageId של כל הגרלה
-const raffleMessages = {}; // raffleId -> messageId
+const raffleMessages = {};
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: process.env.WA_SESSION || 'crownbet' }),
@@ -47,26 +46,37 @@ client.on('disconnected', () => {
 
 client.initialize();
 
-// ── ROUTES ──
-
 app.get('/', (req, res) => res.redirect('/qr'));
 
 app.get('/qr', (req, res) => {
   if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!<br><small style="font-size:14px;margin-top:8px;display:block">התזמון האוטומטי פעיל 📅</small></div></body></html>`);
-  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}.steps{background:#1a1a26;border-radius:12px;padding:1rem;display:inline-block;margin:1rem auto;text-align:right;font-size:14px;color:#7070a0}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><div class="steps">1. פתח וואטסאפ בטלפון<br>2. שלוש נקודות ⋮ → מכשירים מקושרים<br>3. קשר מכשיר → סרוק</div><br><img src="${currentQR}" /></body></html>`);
-  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל... מתרענן כל 5 שניות</p></body></html>`);
+  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><p style="color:#7070a0">וואטסאפ → שלוש נקודות ⋮ → מכשירים מקושרים → סרוק</p><br><img src="${currentQR}" /></body></html>`);
+  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל...</p></body></html>`);
 });
 
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
+
+// ── פונקציה עזר: הכן צ'אט לפני שליחה ──
+async function prepareChat(chatId) {
+  try {
+    const chat = await waClient.getChatById(chatId);
+    await chat.sendSeen();
+    return chat;
+  } catch (err) {
+    console.log('prepareChat error (non-critical):', err.message);
+    return null;
+  }
+}
 
 // ── שלח טקסט ──
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
   try {
-    await waClient.sendMessage(chatId, content);
-    res.json({ success: true });
+    await prepareChat(chatId);
+    const sentMsg = await waClient.sendMessage(chatId, content);
+    res.json({ success: true, messageId: sentMsg.id._serialized });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -75,15 +85,16 @@ app.post('/api/sendImage', async (req, res) => {
   if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, url, caption, raffleId } = req.body;
   try {
-    const media = await MessageMedia.fromUrl(url);
-    const sentMsg = await waClient.sendMessage(chatId, media, { caption: caption || '' });
-    
-    // שמור messageId אם זו הגרלה
+    await prepareChat(chatId);
+    const media = await MessageMedia.fromUrl(url, { unsafeMime: true });
+    const sentMsg = await waClient.sendMessage(chatId, media, { 
+      caption: caption || '',
+      sendMediaAsDocument: false
+    });
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
-      console.log(`💾 נשמר messageId להגרלה ${raffleId}: ${sentMsg.id._serialized}`);
+      console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
     }
-    
     res.json({ success: true, messageId: sentMsg.id._serialized });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -93,13 +104,12 @@ app.post('/api/sendTextWithId', async (req, res) => {
   if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content, raffleId } = req.body;
   try {
+    await prepareChat(chatId);
     const sentMsg = await waClient.sendMessage(chatId, content);
-    
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
       console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
     }
-    
     res.json({ success: true, messageId: sentMsg.id._serialized });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -130,17 +140,16 @@ app.get('/api/getMessageReplies', async (req, res) => {
 // ── קבל messageId של הגרלה ──
 app.get('/api/getRaffleMessageId', (req, res) => {
   const { raffleId } = req.query;
-  const messageId = raffleMessages[raffleId];
-  res.json({ messageId: messageId || null });
+  res.json({ messageId: raffleMessages[raffleId] || null });
 });
 
-// ── זיהוי זוכים ידני ──
+// ── זיהוי זוכים ──
 app.post('/api/findWinners', async (req, res) => {
   const { raffleId } = req.body;
   if (!raffleId) return res.status(400).json({ error: 'חסר raffleId' });
   try {
     const messageId = raffleMessages[raffleId];
-    if (!messageId) return res.status(404).json({ error: 'לא נמצא messageId להגרלה זו' });
+    if (!messageId) return res.status(404).json({ error: 'לא נמצא messageId' });
     const { findWinners } = require('./winner-finder');
     const result = await findWinners(raffleId, messageId);
     res.json({ success: true, result });
