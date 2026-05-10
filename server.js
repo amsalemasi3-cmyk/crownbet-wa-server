@@ -4,16 +4,13 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-// ייבוא Baileys - גרסה גמישה
-const Baileys = require('@whiskeysockets/baileys');
+// ייבוא Baileys - הדרך היחידה שחסינה לכל שגיאת נתיב
 const { 
   default: makeWASocket, 
   useMultiFileAuthState, 
-  DisconnectReason 
-} = Baileys;
-
-// בדיקה של מיקום ה-makeInMemoryStore
-const makeInMemoryStore = Baileys.makeInMemoryStore || require('@whiskeysockets/baileys/lib/Store/make-in-memory-store').makeInMemoryStore;
+  DisconnectReason,
+  makeInMemoryStore 
+} = require('@whiskeysockets/baileys');
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
@@ -31,11 +28,11 @@ const logger = pino({ level: 'silent' });
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   
-  // הגדרת הסטור בצורה בטוחה
+  // הגדרת הסטור בצורה ישירה
   try {
     store = makeInMemoryStore({ logger });
   } catch (e) {
-    console.log("Store initialization failed, continuing without store...");
+    console.log("Store failed, running without it.");
   }
 
   const sock = makeWASocket({
@@ -62,7 +59,6 @@ async function startBaileys() {
       isReady = true;
       waSocket = sock;
       currentQR = null;
-      try { require('./scheduler'); } catch (e) {}
     }
     
     if (connection === 'close') {
@@ -78,6 +74,8 @@ async function startBaileys() {
 }
 
 startBaileys();
+
+// --- Routes ---
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
