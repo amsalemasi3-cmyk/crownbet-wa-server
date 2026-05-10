@@ -8,6 +8,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  Browsers,
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -35,8 +36,7 @@ async function startBaileys() {
     const sock = makeWASocket({
       logger,
       auth: state,
-      // הסרנו printQRInTerminal - deprecated בגרסאות חדשות
-      browser: ['CrownBet', 'Chrome', '120.0.0'],
+      browser: Browsers.ubuntu('Chrome'),  // ← תיקון קוד 405
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
@@ -52,7 +52,7 @@ async function startBaileys() {
           currentQR = await qrcode.toDataURL(qr);
           isReady = false;
         } catch (e) {
-          console.error('❌ שגיאה ביצירת QR image:', e.message);
+          console.error('❌ שגיאה ביצירת QR:', e.message);
         }
       }
 
@@ -101,15 +101,12 @@ async function startBaileys() {
 
 startBaileys();
 
-// ── ראוט ראשי ──
 app.get('/', (req, res) => res.redirect('/qr'));
 
-// ── סטטוס JSON ──
 app.get('/status', (req, res) => {
   res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
 });
 
-// ── דף QR ──
 app.get('/qr', (req, res) => {
   if (isReady) {
     return res.send(`
@@ -150,7 +147,6 @@ app.get('/qr', (req, res) => {
   `);
 });
 
-// ── שלח טקסט ──
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
@@ -162,7 +158,6 @@ app.post('/api/sendText', async (req, res) => {
   }
 });
 
-// ── שלח טקסט + שמור raffleId ──
 app.post('/api/sendTextWithId', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content, raffleId } = req.body;
@@ -175,7 +170,6 @@ app.post('/api/sendTextWithId', async (req, res) => {
   }
 });
 
-// ── שלח תמונה ──
 app.post('/api/sendImage', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, url, caption, raffleId } = req.body;
@@ -190,7 +184,6 @@ app.post('/api/sendImage', async (req, res) => {
   }
 });
 
-// ── קבל messageId של הגרלה ──
 app.get('/api/getRaffleMessageId', (req, res) => {
   const { raffleId } = req.query;
   res.json({ messageId: raffleMessages[raffleId] || null });
