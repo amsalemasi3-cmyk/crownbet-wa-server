@@ -1,7 +1,7 @@
 FROM node:20-slim
 
 RUN apt-get update && apt-get install -y \
-    libvips-dev \
+    git \
     python3 \
     make \
     g++ \
