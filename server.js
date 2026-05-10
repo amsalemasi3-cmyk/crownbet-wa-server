@@ -3,8 +3,7 @@ const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
-const https = require('https');
-const http = require('http');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const {
   default: makeWASocket,
@@ -18,6 +17,7 @@ app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders:
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+const PROXY = process.env.WA_PROXY;
 
 let waSocket = null;
 let isReady = false;
@@ -27,8 +27,9 @@ let isConnecting = false;
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
-// ── כפה IPv4 (תיקון Railway 405) ──
-const ipv4Agent = new https.Agent({ family: 4 });
+// ── Proxy Agent ──
+const proxyAgent = PROXY ? new HttpsProxyAgent(PROXY) : null;
+console.log(proxyAgent ? `🌐 Proxy פעיל: ${PROXY.split('@')[1]}` : '⚠️ אין Proxy — IP ישיר');
 
 async function startBaileys() {
   if (isConnecting) return;
@@ -46,8 +47,10 @@ async function startBaileys() {
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
-      agent: ipv4Agent,          // ← IPv4 בלבד
-      fetchAgent: ipv4Agent,     // ← IPv4 בלבד
+      ...(proxyAgent && {
+        agent: proxyAgent,
+        fetchAgent: proxyAgent,
+      }),
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -111,7 +114,7 @@ startBaileys();
 app.get('/', (req, res) => res.redirect('/qr'));
 
 app.get('/status', (req, res) => {
-  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
+  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting, proxy: !!proxyAgent });
 });
 
 app.get('/qr', (req, res) => {
