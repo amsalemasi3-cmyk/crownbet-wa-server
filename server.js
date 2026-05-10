@@ -57,25 +57,28 @@ app.get('/qr', (req, res) => {
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
 
-// ── פונקציה עזר: הכן צ'אט לפני שליחה ──
+// ── פונקציה עזר: הכן צ'אט ──
 async function prepareChat(chatId) {
   try {
     const chat = await waClient.getChatById(chatId);
     await chat.sendSeen();
     return chat;
   } catch (err) {
-    console.log('prepareChat error (non-critical):', err.message);
+    console.log('prepareChat error:', err.message);
     return null;
   }
 }
 
-// ── שלח טקסט ──
+// ── שלח טקסט עם אפשרויות מלאות ──
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
   try {
     await prepareChat(chatId);
-    const sentMsg = await waClient.sendMessage(chatId, content);
+    const sentMsg = await waClient.sendMessage(chatId, content, {
+      isViewOnce: false,
+      forwardingScore: 0,
+    });
     res.json({ success: true, messageId: sentMsg.id._serialized });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -87,9 +90,11 @@ app.post('/api/sendImage', async (req, res) => {
   try {
     await prepareChat(chatId);
     const media = await MessageMedia.fromUrl(url, { unsafeMime: true });
-    const sentMsg = await waClient.sendMessage(chatId, media, { 
+    const sentMsg = await waClient.sendMessage(chatId, media, {
       caption: caption || '',
-      sendMediaAsDocument: false
+      sendMediaAsDocument: false,
+      isViewOnce: false,
+      forwardingScore: 0,
     });
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
@@ -105,7 +110,10 @@ app.post('/api/sendTextWithId', async (req, res) => {
   const { chatId, content, raffleId } = req.body;
   try {
     await prepareChat(chatId);
-    const sentMsg = await waClient.sendMessage(chatId, content);
+    const sentMsg = await waClient.sendMessage(chatId, content, {
+      isViewOnce: false,
+      forwardingScore: 0,
+    });
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
       console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
@@ -124,8 +132,8 @@ app.get('/api/getMessageReplies', async (req, res) => {
     const chat = await waClient.getChatById(GROUP_ID);
     const messages = await chat.fetchMessages({ limit: 1000 });
     const replies = messages.filter(m => {
-      return m._data && m._data.quotedStanzaID && 
-             (m._data.quotedStanzaID === messageId || 
+      return m._data && m._data.quotedStanzaID &&
+             (m._data.quotedStanzaID === messageId ||
               messageId.includes(m._data.quotedStanzaID));
     }).map(m => ({
       senderName: m._data.notifyName || m.from,
