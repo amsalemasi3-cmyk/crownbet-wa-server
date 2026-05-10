@@ -4,12 +4,12 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-// ייבוא Baileys - הגדרה יציבה שעובדת בכל סביבה
+// ייבוא Baileys - הגדרה יציבה שמתאימה ללינוקס (Railway)
 const { 
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  makeInMemoryStore // ייבוא ישיר מהחבילה הראשית - מונע MODULE_NOT_FOUND
+  makeInMemoryStore // ייבוא ישיר למניעת שגיאות נתיב
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -40,7 +40,7 @@ async function startBaileys() {
     auth: state,
     printQRInTerminal: false,
     browser: ['CrownBet', 'Chrome', '120.0.0'],
-    // הוספת הגדרה שתעזור בחיבור יציב
+    // הגדרה לחיבור מהיר ויציב יותר
     syncFullHistory: false
   });
 
@@ -119,7 +119,6 @@ app.get('/api/getMessageReplies', async (req, res) => {
   if (!messageId) return res.status(400).json({ error: 'Missing messageId' });
   try {
     const GROUP_ID = process.env.GROUP_ID;
-    // טעינת הודעות מהסטור
     const msgs = await store.loadMessages(GROUP_ID, 100);
     const replies = (msgs || []).filter(m =>
       m.message?.extendedTextMessage?.contextInfo?.stanzaId === messageId ||
@@ -133,7 +132,7 @@ app.get('/api/getMessageReplies', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// האזנה לפורט 0.0.0.0
+// האזנה לפורט 0.0.0.0 - קריטי ל-Railway
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
