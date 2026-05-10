@@ -4,23 +4,21 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-// ייבוא בסיסי של Baileys
+// ייבוא Baileys - הגדרה יציבה שעובדת בכל סביבה
 const { 
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  makeInMemoryStore // ייבוא ישיר מהחבילה הראשית - מונע MODULE_NOT_FOUND
 } = require('@whiskeysockets/baileys');
-
-// התיקון הסופי לייבוא ה-Store בגרסאות החדשות
-const makeInMemoryStore = require('@whiskeysockets/baileys/lib/Store/make-in-memory-store').default;
 
 const app = express();
 
-// הגדרת CORS מורחבת למניעת חסימות
+// הגדרת CORS למניעת חסימות ב-Railway
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
 
-// Railway דורש האזנה ל-0.0.0.0 כדי שהשרת יהיה נגיש
+// פורט שמתאים ל-Railway
 const PORT = process.env.PORT || 3000;
 
 let waSocket = null;
@@ -34,41 +32,41 @@ const logger = pino({ level: 'silent' });
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   
-  // אתחול הסטור עם התיקון החדש
+  // אתחול הסטור
   store = makeInMemoryStore({ logger });
 
   const sock = makeWASocket({
     logger,
     auth: state,
     printQRInTerminal: false,
-    // הגדרת דפדפן כדי למנוע ניתוקים מהירים
     browser: ['CrownBet', 'Chrome', '120.0.0'],
+    // הוספת הגדרה שתעזור בחיבור יציב
+    syncFullHistory: false
   });
 
-  // חיבור הסטור לאירועי הסוקט
+  // חיבור הסטור לאירועים
   store.bind(sock.ev);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     
     if (qr) {
-      console.log('📱 QR מוכן — כנס ל /qr');
+      console.log('📱 QR ready - scan at /qr');
       currentQR = await qrcode.toDataURL(qr);
       isReady = false;
     }
     
     if (connection === 'open') {
-      console.log('✅ WhatsApp מחובר!');
+      console.log('✅ WhatsApp Connected!');
       isReady = true;
       waSocket = sock;
       currentQR = null;
-      // טעינת מתזמן המשימות (אם קיים)
-      try { require('./scheduler'); } catch (e) { console.log('Scheduler not found, skipping...'); }
+      try { require('./scheduler'); } catch (e) { console.log('Scheduler not found'); }
     }
     
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('❌ חיבור נסגר, מנסה להתחבר מחדש:', shouldReconnect);
+      console.log('❌ Connection closed, reconnecting:', shouldReconnect);
       isReady = false;
       waSocket = null;
       if (shouldReconnect) setTimeout(startBaileys, 3000);
@@ -79,10 +77,10 @@ async function startBaileys() {
   return sock;
 }
 
-// הפעלת הבוט
+// הפעלה
 startBaileys();
 
-// --- נתיבי API ---
+// --- Routes ---
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
@@ -95,7 +93,7 @@ app.get('/qr', (req, res) => {
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 
 app.post('/api/sendText', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  if (!isReady || !waSocket) return res.status(503).json({ error: 'Not connected' });
   const { chatId, content } = req.body;
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
@@ -104,7 +102,7 @@ app.post('/api/sendText', async (req, res) => {
 });
 
 app.post('/api/sendImage', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  if (!isReady || !waSocket) return res.status(503).json({ error: 'Not connected' });
   const { chatId, url, caption, raffleId } = req.body;
   try {
     const response = await axios.get(url, { responseType: 'arraybuffer' });
@@ -116,11 +114,12 @@ app.post('/api/sendImage', async (req, res) => {
 });
 
 app.get('/api/getMessageReplies', async (req, res) => {
-  if (!isReady || !waSocket || !store) return res.status(503).json({ error: 'שרת לא מוכן' });
+  if (!isReady || !waSocket || !store) return res.status(503).json({ error: 'Server not ready' });
   const { messageId } = req.query;
-  if (!messageId) return res.status(400).json({ error: 'חסר messageId' });
+  if (!messageId) return res.status(400).json({ error: 'Missing messageId' });
   try {
     const GROUP_ID = process.env.GROUP_ID;
+    // טעינת הודעות מהסטור
     const msgs = await store.loadMessages(GROUP_ID, 100);
     const replies = (msgs || []).filter(m =>
       m.message?.extendedTextMessage?.contextInfo?.stanzaId === messageId ||
@@ -134,7 +133,7 @@ app.get('/api/getMessageReplies', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// האזנה לפורט - הוספת 0.0.0.0 קריטית ל-Railway
+// האזנה לפורט 0.0.0.0
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 שרת CrownBet פועל על פורט ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
