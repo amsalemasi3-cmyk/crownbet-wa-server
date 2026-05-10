@@ -4,21 +4,20 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-// ייבוא Baileys - הגדרה יציבה שמתאימה ללינוקס (Railway)
+// ייבוא Baileys - הגדרה חסינת טעויות ל-Railway
 const { 
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  makeInMemoryStore // ייבוא ישיר למניעת שגיאות נתיב
+  makeInMemoryStore 
 } = require('@whiskeysockets/baileys');
 
 const app = express();
 
-// הגדרת CORS למניעת חסימות ב-Railway
+// הגדרת CORS למניעת חסימות
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
 
-// פורט שמתאים ל-Railway
 const PORT = process.env.PORT || 3000;
 
 let waSocket = null;
@@ -40,11 +39,9 @@ async function startBaileys() {
     auth: state,
     printQRInTerminal: false,
     browser: ['CrownBet', 'Chrome', '120.0.0'],
-    // הגדרה לחיבור מהיר ויציב יותר
     syncFullHistory: false
   });
 
-  // חיבור הסטור לאירועים
   store.bind(sock.ev);
 
   sock.ev.on('connection.update', async (update) => {
@@ -66,7 +63,6 @@ async function startBaileys() {
     
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('❌ Connection closed, reconnecting:', shouldReconnect);
       isReady = false;
       waSocket = null;
       if (shouldReconnect) setTimeout(startBaileys, 3000);
@@ -77,10 +73,7 @@ async function startBaileys() {
   return sock;
 }
 
-// הפעלה
 startBaileys();
-
-// --- Routes ---
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
@@ -132,7 +125,6 @@ app.get('/api/getMessageReplies', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// האזנה לפורט 0.0.0.0 - קריטי ל-Railway
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
