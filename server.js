@@ -4,17 +4,18 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 
-// ייבוא Baileys - הגדרה חסינת טעויות ל-Railway
+// ייבוא Baileys - גרסה גמישה
+const Baileys = require('@whiskeysockets/baileys');
 const { 
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  makeInMemoryStore 
-} = require('@whiskeysockets/baileys');
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  DisconnectReason 
+} = Baileys;
+
+// בדיקה של מיקום ה-makeInMemoryStore
+const makeInMemoryStore = Baileys.makeInMemoryStore || require('@whiskeysockets/baileys/lib/Store/make-in-memory-store').makeInMemoryStore;
 
 const app = express();
-
-// הגדרת CORS למניעת חסימות
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
 
@@ -25,14 +26,17 @@ let isReady = false;
 let currentQR = null;
 let store = null;
 
-const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
 async function startBaileys() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   
-  // אתחול הסטור
-  store = makeInMemoryStore({ logger });
+  // הגדרת הסטור בצורה בטוחה
+  try {
+    store = makeInMemoryStore({ logger });
+  } catch (e) {
+    console.log("Store initialization failed, continuing without store...");
+  }
 
   const sock = makeWASocket({
     logger,
@@ -42,7 +46,7 @@ async function startBaileys() {
     syncFullHistory: false
   });
 
-  store.bind(sock.ev);
+  if (store) store.bind(sock.ev);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -58,7 +62,7 @@ async function startBaileys() {
       isReady = true;
       waSocket = sock;
       currentQR = null;
-      try { require('./scheduler'); } catch (e) { console.log('Scheduler not found'); }
+      try { require('./scheduler'); } catch (e) {}
     }
     
     if (connection === 'close') {
@@ -78,12 +82,10 @@ startBaileys();
 app.get('/', (req, res) => res.redirect('/qr'));
 
 app.get('/qr', (req, res) => {
-  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>`);
-  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><p style="color:#7070a0">וואטסאפ → שלוש נקודות ⋮ → מכשירים מקושרים → סרוק</p><br><img src="${currentQR}" /></body></html>`);
-  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל...</p></body></html>`);
+  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר!</div></body></html>`);
+  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><br><img src="${currentQR}" /></body></html>`);
+  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title></head><body><h1>⏳ מאתחל...</h1></body></html>`);
 });
-
-app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'Not connected' });
@@ -91,37 +93,6 @@ app.post('/api/sendText', async (req, res) => {
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
     res.json({ success: true, messageId: sent.key.id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/sendImage', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'Not connected' });
-  const { chatId, url, caption, raffleId } = req.body;
-  try {
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(response.data);
-    const sent = await waSocket.sendMessage(chatId, { image: buffer, caption: caption || '' });
-    if (raffleId) raffleMessages[raffleId] = sent.key.id;
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/getMessageReplies', async (req, res) => {
-  if (!isReady || !waSocket || !store) return res.status(503).json({ error: 'Server not ready' });
-  const { messageId } = req.query;
-  if (!messageId) return res.status(400).json({ error: 'Missing messageId' });
-  try {
-    const GROUP_ID = process.env.GROUP_ID;
-    const msgs = await store.loadMessages(GROUP_ID, 100);
-    const replies = (msgs || []).filter(m =>
-      m.message?.extendedTextMessage?.contextInfo?.stanzaId === messageId ||
-      m.message?.imageMessage?.contextInfo?.stanzaId === messageId
-    ).map(m => ({
-      senderName: m.pushName || m.key.participant,
-      body: m.message?.extendedTextMessage?.text || m.message?.conversation || '',
-      timestamp: m.messageTimestamp
-    }));
-    res.json({ replies });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
