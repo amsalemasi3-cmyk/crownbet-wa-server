@@ -3,6 +3,8 @@ const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
+const https = require('https');
+const http = require('http');
 
 const {
   default: makeWASocket,
@@ -25,6 +27,9 @@ let isConnecting = false;
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
+// ── כפה IPv4 (תיקון Railway 405) ──
+const ipv4Agent = new https.Agent({ family: 4 });
+
 async function startBaileys() {
   if (isConnecting) return;
   isConnecting = true;
@@ -36,11 +41,13 @@ async function startBaileys() {
     const sock = makeWASocket({
       logger,
       auth: state,
-      browser: Browsers.ubuntu('Chrome'),  // ← תיקון קוד 405
+      browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
+      agent: ipv4Agent,          // ← IPv4 בלבד
+      fetchAgent: ipv4Agent,     // ← IPv4 בלבד
     });
 
     sock.ev.on('connection.update', async (update) => {
