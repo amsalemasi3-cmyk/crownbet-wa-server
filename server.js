@@ -2,56 +2,39 @@ const express = require('express');
 const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
-const axios = require('axios');
 
-// ייבוא Baileys - הדרך היחידה שחסינה לכל שגיאת נתיב
 const { 
   default: makeWASocket, 
   useMultiFileAuthState, 
-  DisconnectReason,
-  makeInMemoryStore 
+  DisconnectReason 
 } = require('@whiskeysockets/baileys');
 
 const app = express();
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
-let waSocket = null;
 let isReady = false;
 let currentQR = null;
-let store = null;
-
-const logger = pino({ level: 'silent' });
+let waSocket = null;
 
 async function startBaileys() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   
-  // הגדרת הסטור בצורה ישירה
-  try {
-    store = makeInMemoryStore({ logger });
-  } catch (e) {
-    console.log("Store failed, running without it.");
-  }
-
   const sock = makeWASocket({
-    logger,
+    logger: pino({ level: 'silent' }),
     auth: state,
-    printQRInTerminal: false,
-    browser: ['CrownBet', 'Chrome', '120.0.0'],
-    syncFullHistory: false
+    printQRInTerminal: true,
+    browser: ['CrownBet', 'Chrome', '120.0.0']
   });
-
-  if (store) store.bind(sock.ev);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     
     if (qr) {
-      console.log('📱 QR ready - scan at /qr');
+      console.log('New QR Generated');
       currentQR = await qrcode.toDataURL(qr);
-      isReady = false;
     }
     
     if (connection === 'open') {
@@ -64,36 +47,21 @@ async function startBaileys() {
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       isReady = false;
-      waSocket = null;
-      if (shouldReconnect) setTimeout(startBaileys, 3000);
+      if (shouldReconnect) startBaileys();
     }
   });
 
   sock.ev.on('creds.update', saveCreds);
-  return sock;
 }
 
 startBaileys();
 
-// --- Routes ---
-
-app.get('/', (req, res) => res.redirect('/qr'));
-
-app.get('/qr', (req, res) => {
-  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר!</div></body></html>`);
-  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><br><img src="${currentQR}" /></body></html>`);
-  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title></head><body><h1>⏳ מאתחל...</h1></body></html>`);
-});
-
-app.post('/api/sendText', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'Not connected' });
-  const { chatId, content } = req.body;
-  try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+app.get('/', (req, res) => {
+  if (isReady) return res.send('<h1>Connected! ✅</h1>');
+  if (currentQR) return res.send(`<h1>Scan QR:</h1><br><img src="${currentQR}">`);
+  return res.send('<h1>Initializing... please wait and refresh</h1>');
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server on port ${PORT}`);
 });
