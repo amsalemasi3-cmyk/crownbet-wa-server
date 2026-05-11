@@ -64,7 +64,7 @@ async function startBaileys() {
 
         try {
           console.log('📅 מפעיל Scheduler...');
-          require('./schedule');
+          require('./scheduler');
         } catch (e) {
           console.error('❌ שגיאה בטעינת Schedule:', e.message);
         }
