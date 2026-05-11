@@ -32,7 +32,7 @@ async function startBaileys() {
   console.log('🔄 מתחיל Baileys...');
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_v6');
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
       logger,
