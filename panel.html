@@ -737,6 +737,8 @@ let allRaffles = [];
 let selected = null;
 let sentHistory = JSON.parse(localStorage.getItem('cb_history') || '[]');
 let config = JSON.parse(localStorage.getItem('cb_config') || '{"groupId":"120363408842381633@g.us","server":"https://crownbet-wa-server-production.up.railway.app"}');
+// תמיד וודא שהשרת נכון
+config.server = 'https://crownbet-wa-server-production.up.railway.app';
 
 // ── INIT ──
 loadConfig();
