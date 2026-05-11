@@ -1,272 +1,113 @@
-const express = require('express');
-const cors = require('cors');
-const qrcode = require('qrcode');
-const pino = require('pino');
-const axios = require('axios');
-const path = require('path');
+app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
+app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
 
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  makeCacheableSignalKeyStore,
-} = require('@whiskeysockets/baileys');
-
-const app = express();
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
-app.use(express.json());
-
-const PORT = process.env.PORT || 8080;
-
-let waSocket = null;
-let isReady = false;
-let currentQR = null;
-let isConnecting = false;
-let schedulerLoaded = false;
-
-const msgStore = new Map();
-const raffleMessages = {};
-const logger = pino({ level: 'silent' });
-
-// ✅ מאגר LID: שומר מיפוי בין מספר טלפון ל-LID של iOS
-const lidMap = new Map();
-
-// ✅ פונקציה שמחזירה את ה-JID הנכון לפני שליחה
-function resolveJid(jid) {
-  if (!jid) return jid;
-  const normalized = jid.includes('@') ? jid.toLowerCase() : `${jid}@s.whatsapp.net`;
-  const lid = lidMap.get(normalized);
-  if (lid) {
-    console.log(`🔄 LID resolved: ${normalized} → ${lid}`);
-    return lid;
-  }
-  return normalized;
-}
-
-async function startBaileys() {
-  if (isConnecting) return;
-  isConnecting = true;
-  console.log('🔄 מתחיל Baileys...');
-
+// ── פונקציה עזר: הכן צ'אט לפני שליחה ──
+// ── פונקציה עזר: הכן צ'אט ──
+async function prepareChat(chatId) {
   try {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
-    const sock = makeWASocket({
-      version: [2, 3000, 1027934701], // ✅ תיקון שגיאת 405
-      logger,
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
-      },
-      browser: ['Ubuntu', 'Chrome', '20.0.04'],
-      syncFullHistory: false,
-      connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: undefined, // ✅ מונע סגירת session מוקדמת
-      keepAliveIntervalMs: 10_000,
-      generateHighQualityLinkPreview: true,
-      getMessage: async (key) => {
-        if (!key.id) return undefined;
-        return msgStore.get(key.id) || undefined;
-      },
-    });
-
-    sock.ev.on('messages.upsert', ({ messages }) => {
-      for (const msg of messages) {
-        // ✅ שמור הודעה ב-store
-        if (msg.key?.id && msg.message) {
-          msgStore.set(msg.key.id, msg.message);
-          setTimeout(() => msgStore.delete(msg.key.id), 24 * 60 * 60 * 1000);
-        }
-
-        // ✅ שמור מיפוי LID ← מספר טלפון (לתיקון בעיית iOS)
-        if (msg.key?.remoteJid?.includes('@lid') && msg.key?.senderPn) {
-          const pn = `${msg.key.senderPn}@s.whatsapp.net`;
-          if (!lidMap.has(pn)) {
-            lidMap.set(pn, msg.key.remoteJid);
-            console.log(`📱 LID mapping נשמר: ${pn} → ${msg.key.remoteJid}`);
-          }
-        }
-
-        // ✅ מיפוי נוסף דרך previousRemoteJid
-        if (msg.key?.previousRemoteJid?.includes('@lid') && msg.key?.remoteJid?.includes('@s.whatsapp.net')) {
-          if (!lidMap.has(msg.key.remoteJid)) {
-            lidMap.set(msg.key.remoteJid, msg.key.previousRemoteJid);
-            console.log(`📱 LID mapping (prev) נשמר: ${msg.key.remoteJid} → ${msg.key.previousRemoteJid}`);
-          }
-        }
-      }
-    });
-
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        console.log('📱 QR התקבל — כנס ל /qr');
-        try {
-          currentQR = await qrcode.toDataURL(qr);
-          isReady = false;
-        } catch (e) {
-          console.error('❌ שגיאה ביצירת QR:', e.message);
-        }
-      }
-
-      if (connection === 'open') {
-        console.log('✅ WhatsApp מחובר!');
-        isReady = true;
-        waSocket = sock;
-        currentQR = null;
-        isConnecting = false;
-
-        if (!schedulerLoaded) {
-          schedulerLoaded = true;
-          try {
-            console.log('📅 מפעיל Scheduler...');
-            require('./scheduler');
-          } catch (e) {
-            console.error('❌ שגיאה בטעינת Schedule:', e.message);
-          }
-        }
-      }
-
-      if (connection === 'close') {
-        const code = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = code !== DisconnectReason.loggedOut;
-        console.log(`🔌 חיבור נסגר — קוד: ${code}`);
-        isReady = false;
-        waSocket = null;
-        currentQR = null;
-        isConnecting = false;
-        if (shouldReconnect) {
-          console.log('🔄 מתחבר מחדש בעוד 5 שניות...');
-          setTimeout(startBaileys, 5000);
-        } else {
-          console.log('🚪 נותקת מ-WhatsApp. מחק auth_info ועשה redeploy.');
-        }
-      }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
+    const chat = await waClient.getChatById(chatId);
+    await chat.sendSeen();
+    return chat;
   } catch (err) {
-    console.error('❌ שגיאה קריטית:', err.message);
-    isConnecting = false;
-    setTimeout(startBaileys, 5000);
+    console.log('prepareChat error (non-critical):', err.message);
+    console.log('prepareChat error:', err.message);
+    return null;
   }
 }
 
-startBaileys();
-
-app.get('/', (req, res) => res.redirect('/qr'));
-
-app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'panel.html'));
-});
-
-app.get('/status', (req, res) => {
-  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
-});
-
-app.get('/qr', (req, res) => {
-  if (isReady) {
-    return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet ✅</title>
-      <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
-      h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;
-      display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head>
-      <body><h1>👑 CrownBet WA Server</h1>
-      <div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>`);
-  }
-  if (currentQR) {
-    return res.send(`<html dir="rtl"><head><meta charset="utf-8">
-      <meta http-equiv="refresh" content="30"><title>סרוק QR</title>
-      <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}
-      h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}
-      p{color:#7070a0}</style></head>
-      <body><h1>👑 CrownBet — סרוק QR</h1>
-      <p>וואטסאפ ← שלוש נקודות ⋮ ← מכשירים מקושרים ← קשר מכשיר ← סרוק</p>
-      <br><img src="${currentQR}" />
-      <p style="margin-top:1rem;font-size:0.85rem">הדף מתרענן כל 30 שניות</p>
-      </body></html>`);
-  }
-  return res.send(`<html dir="rtl"><head><meta charset="utf-8">
-    <meta http-equiv="refresh" content="4"><title>CrownBet</title>
-    <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
-    h1{color:#f5c842}</style></head>
-    <body><h1>👑 CrownBet WA Server</h1>
-    <p style="color:#7070a0">⏳ מאתחל חיבור... הדף יתרענן אוטומטית</p>
-    </body></html>`);
-});
-
-app.get('/api/test', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  try {
-    const chatId = resolveJid(process.env.GROUP_ID);
-    const text = '🧪 טסט מהבוט — ' + new Date().toLocaleTimeString('he-IL');
-    const sent = await waSocket.sendMessage(chatId, { text });
-    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: text });
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/groups', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  try {
-    const groups = await waSocket.groupFetchAllParticipating();
-    const list = Object.values(groups).map(g => ({ id: g.id, name: g.subject }));
-    res.json(list);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// ── שלח טקסט ──
+// ── שלח טקסט עם אפשרויות מלאות ──
 app.post('/api/sendText', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
   try {
-    const resolvedId = resolveJid(chatId);
-    const sent = await waSocket.sendMessage(resolvedId, { text: content });
-    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    await prepareChat(chatId);
+    const sentMsg = await waClient.sendMessage(chatId, content);
+    const sentMsg = await waClient.sendMessage(chatId, content, {
+      isViewOnce: false,
+      forwardingScore: 0,
+    });
+    res.json({ success: true, messageId: sentMsg.id._serialized });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-app.post('/api/sendTextWithId', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+@@ -87,9 +90,11 @@
+  try {
+    await prepareChat(chatId);
+    const media = await MessageMedia.fromUrl(url, { unsafeMime: true });
+    const sentMsg = await waClient.sendMessage(chatId, media, { 
+    const sentMsg = await waClient.sendMessage(chatId, media, {
+      caption: caption || '',
+      sendMediaAsDocument: false
+      sendMediaAsDocument: false,
+      isViewOnce: false,
+      forwardingScore: 0,
+    });
+    if (raffleId) {
+      raffleMessages[raffleId] = sentMsg.id._serialized;
+@@ -105,7 +110,10 @@
   const { chatId, content, raffleId } = req.body;
   try {
-    const resolvedId = resolveJid(chatId);
-    const sent = await waSocket.sendMessage(resolvedId, { text: content });
-    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
-    if (raffleId) raffleMessages[raffleId] = sent.key.id;
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    await prepareChat(chatId);
+    const sentMsg = await waClient.sendMessage(chatId, content);
+    const sentMsg = await waClient.sendMessage(chatId, content, {
+      isViewOnce: false,
+      forwardingScore: 0,
+    });
+    if (raffleId) {
+      raffleMessages[raffleId] = sentMsg.id._serialized;
+      console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
+@@ -124,52 +132,52 @@
+    const chat = await waClient.getChatById(GROUP_ID);
+    const messages = await chat.fetchMessages({ limit: 1000 });
+    const replies = messages.filter(m => {
+      return m._data && m._data.quotedStanzaID && 
+             (m._data.quotedStanzaID === messageId || 
+      return m._data && m._data.quotedStanzaID &&
+             (m._data.quotedStanzaID === messageId ||
+              messageId.includes(m._data.quotedStanzaID));
+    }).map(m => ({
+      senderName: m._data.notifyName || m.from,
+      senderId: m.from,
+      body: m.body,
+      timestamp: m.timestamp
+    }));
+    res.json({ replies });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/sendImage', async (req, res) => {
-  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
-  const { chatId, url, caption, raffleId } = req.body;
-  try {
-    const resolvedId = resolveJid(chatId);
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(response.data);
-    const sent = await waSocket.sendMessage(resolvedId, { image: buffer, caption: caption || '' });
-    if (raffleId) raffleMessages[raffleId] = sent.key.id;
-    res.json({ success: true, messageId: sent.key.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// ── קבל messageId של הגרלה ──
 app.get('/api/getRaffleMessageId', (req, res) => {
   const { raffleId } = req.query;
   res.json({ messageId: raffleMessages[raffleId] || null });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+// ── זיהוי זוכים ──
+app.post('/api/findWinners', async (req, res) => {
+  const { raffleId } = req.body;
+  if (!raffleId) return res.status(400).json({ error: 'חסר raffleId' });
+  try {
+    const messageId = raffleMessages[raffleId];
+    if (!messageId) return res.status(404).json({ error: 'לא נמצא messageId' });
+    const { findWinners } = require('./winner-finder');
+    const result = await findWinners(raffleId, messageId);
+    res.json({ success: true, result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── רשימת קבוצות ──
+app.get('/api/getGroups', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  try {
+    const chats = await waClient.getChats();
+    const groups = chats.filter(c => c.isGroup).map(g => ({ id: g.id._serialized, name: g.name }));
+    res.json({ groups });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.listen(PORT, () => {
   console.log(`🚀 שרת פועל על פורט ${PORT}`);
+  setTimeout(() => {
+    require('./scheduler');
+    console.log('📅 תזמון אוטומטי פעיל!');
+  }, 5000);
 });
