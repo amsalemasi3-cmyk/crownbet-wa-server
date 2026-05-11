@@ -24,9 +24,7 @@ let currentQR = null;
 let isConnecting = false;
 let schedulerLoaded = false;
 
-// שמירת הודעות בזיכרון (במקום Redis)
 const msgStore = new Map();
-
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
@@ -42,10 +40,9 @@ async function startBaileys() {
       logger,
       auth: {
         creds: state.creds,
-        // ← זה הפתרון לבעיית "בהמתנה להודעה"
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
-      browser: ['Windows', 'Desktop', '10.0'],
+      browser: ['Ubuntu', 'Chrome', '20.0.04'],
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
@@ -53,17 +50,14 @@ async function startBaileys() {
       generateHighQualityLinkPreview: true,
       getMessage: async (key) => {
         if (!key.id) return undefined;
-        const msg = msgStore.get(key.id);
-        if (msg) return msg;
-        return undefined;
+        return msgStore.get(key.id) || undefined;
       },
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
         if (msg.key?.id && msg.message) {
           msgStore.set(msg.key.id, msg.message);
-          // מחק אחרי 24 שעות
           setTimeout(() => msgStore.delete(msg.key.id), 24 * 60 * 60 * 1000);
         }
       }
@@ -103,13 +97,11 @@ async function startBaileys() {
       if (connection === 'close') {
         const code = lastDisconnect?.error?.output?.statusCode;
         const shouldReconnect = code !== DisconnectReason.loggedOut;
-
         console.log(`🔌 חיבור נסגר — קוד: ${code}`);
         isReady = false;
         waSocket = null;
         currentQR = null;
         isConnecting = false;
-
         if (shouldReconnect) {
           console.log('🔄 מתחבר מחדש בעוד 5 שניות...');
           setTimeout(startBaileys, 5000);
@@ -142,21 +134,16 @@ app.get('/status', (req, res) => {
 
 app.get('/qr', (req, res) => {
   if (isReady) {
-    return res.send(`
-      <html dir="rtl"><head><meta charset="utf-8"><title>CrownBet ✅</title>
+    return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet ✅</title>
       <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
       h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;
       display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head>
       <body><h1>👑 CrownBet WA Server</h1>
-      <div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>
-    `);
+      <div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!</div></body></html>`);
   }
-
   if (currentQR) {
-    return res.send(`
-      <html dir="rtl"><head><meta charset="utf-8">
-      <meta http-equiv="refresh" content="30">
-      <title>סרוק QR</title>
+    return res.send(`<html dir="rtl"><head><meta charset="utf-8">
+      <meta http-equiv="refresh" content="30"><title>סרוק QR</title>
       <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}
       h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}
       p{color:#7070a0}</style></head>
@@ -164,20 +151,15 @@ app.get('/qr', (req, res) => {
       <p>וואטסאפ ← שלוש נקודות ⋮ ← מכשירים מקושרים ← קשר מכשיר ← סרוק</p>
       <br><img src="${currentQR}" />
       <p style="margin-top:1rem;font-size:0.85rem">הדף מתרענן כל 30 שניות</p>
-      </body></html>
-    `);
+      </body></html>`);
   }
-
-  return res.send(`
-    <html dir="rtl"><head><meta charset="utf-8">
-    <meta http-equiv="refresh" content="4">
-    <title>CrownBet</title>
+  return res.send(`<html dir="rtl"><head><meta charset="utf-8">
+    <meta http-equiv="refresh" content="4"><title>CrownBet</title>
     <style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}
     h1{color:#f5c842}</style></head>
     <body><h1>👑 CrownBet WA Server</h1>
     <p style="color:#7070a0">⏳ מאתחל חיבור... הדף יתרענן אוטומטית</p>
-    </body></html>
-  `);
+    </body></html>`);
 });
 
 app.get('/api/test', async (req, res) => {
