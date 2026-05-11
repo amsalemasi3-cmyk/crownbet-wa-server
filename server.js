@@ -8,7 +8,6 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  Browsers,
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -36,7 +35,7 @@ async function startBaileys() {
     const sock = makeWASocket({
       logger,
       auth: state,
-      browser: Browsers.macOS('Safari'),
+      browser: ['Ubuntu', 'Chrome', '20.0.04'],
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
