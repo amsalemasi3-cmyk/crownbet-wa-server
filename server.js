@@ -9,6 +9,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  makeCacheableSignalKeyStore,
 } = require('@whiskeysockets/baileys');
 
 const app = express();
@@ -21,8 +22,11 @@ let waSocket = null;
 let isReady = false;
 let currentQR = null;
 let isConnecting = false;
+let schedulerLoaded = false;
 
-const msgStore = {};
+// שמירת הודעות בזיכרון (במקום Redis)
+const msgStore = new Map();
+
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
@@ -36,23 +40,32 @@ async function startBaileys() {
 
     const sock = makeWASocket({
       logger,
-      auth: state,
-      browser: ['Ubuntu', 'Chrome', '20.0.04'],
+      auth: {
+        creds: state.creds,
+        // ← זה הפתרון לבעיית "בהמתנה להודעה"
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
+      browser: ['Windows', 'Desktop', '10.0'],
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
       generateHighQualityLinkPreview: true,
       getMessage: async (key) => {
-        const id = key.id;
-        if (msgStore[id]) return msgStore[id];
-        return { conversation: '' };
+        if (!key.id) return undefined;
+        const msg = msgStore.get(key.id);
+        if (msg) return msg;
+        return undefined;
       },
     });
 
-    sock.ev.on('messages.upsert', ({ messages }) => {
+    sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const msg of messages) {
-        if (msg.key?.id) msgStore[msg.key.id] = msg.message;
+        if (msg.key?.id && msg.message) {
+          msgStore.set(msg.key.id, msg.message);
+          // מחק אחרי 24 שעות
+          setTimeout(() => msgStore.delete(msg.key.id), 24 * 60 * 60 * 1000);
+        }
       }
     });
 
@@ -76,11 +89,14 @@ async function startBaileys() {
         currentQR = null;
         isConnecting = false;
 
-        try {
-          console.log('📅 מפעיל Scheduler...');
-          require('./scheduler');
-        } catch (e) {
-          console.error('❌ שגיאה בטעינת Schedule:', e.message);
+        if (!schedulerLoaded) {
+          schedulerLoaded = true;
+          try {
+            console.log('📅 מפעיל Scheduler...');
+            require('./scheduler');
+          } catch (e) {
+            console.error('❌ שגיאה בטעינת Schedule:', e.message);
+          }
         }
       }
 
@@ -164,14 +180,13 @@ app.get('/qr', (req, res) => {
   `);
 });
 
-// ── טסט שליחה ישירה מהבוט ──
 app.get('/api/test', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   try {
     const chatId = process.env.GROUP_ID;
     const text = '🧪 טסט מהבוט — ' + new Date().toLocaleTimeString('he-IL');
     const sent = await waSocket.sendMessage(chatId, { text });
-    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: text };
+    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: text });
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -194,7 +209,7 @@ app.post('/api/sendText', async (req, res) => {
   const { chatId, content } = req.body;
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
-    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: content };
+    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -206,7 +221,7 @@ app.post('/api/sendTextWithId', async (req, res) => {
   const { chatId, content, raffleId } = req.body;
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
-    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: content };
+    if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
     if (raffleId) raffleMessages[raffleId] = sent.key.id;
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
