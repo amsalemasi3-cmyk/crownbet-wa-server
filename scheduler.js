@@ -3,7 +3,7 @@ const axios = require('axios');
 const {
   GROUP_ID, morningMessages, afterRaffleMessages, 
   weekdayNoon, weekdayAfternoon, weekdayEvening,
-  weekdayLateEvening, weekdayMidnight, lateNightMessages,
+  weekdayLateEvening, weekdayMidnight, lateNightMessages, 
   veryLateNightMessages, weekendMessages, motzashMessages,
   getRandom, randomDelay, isWeekend, isMoatzash
 } = require('./messages');
