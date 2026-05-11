@@ -22,9 +22,7 @@ let isReady = false;
 let currentQR = null;
 let isConnecting = false;
 
-// שמירת הודעות אחרונות לצורך getMessage
 const msgStore = {};
-
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
@@ -45,7 +43,6 @@ async function startBaileys() {
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
       generateHighQualityLinkPreview: true,
-      // ← תיקון "בהמתנה להודעה"
       getMessage: async (key) => {
         const id = key.id;
         if (msgStore[id]) return msgStore[id];
@@ -53,7 +50,6 @@ async function startBaileys() {
       },
     });
 
-    // שמור הודעות יוצאות ל-store
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
         if (msg.key?.id) msgStore[msg.key.id] = msg.message;
@@ -166,6 +162,20 @@ app.get('/qr', (req, res) => {
     <p style="color:#7070a0">⏳ מאתחל חיבור... הדף יתרענן אוטומטית</p>
     </body></html>
   `);
+});
+
+// ── טסט שליחה ישירה מהבוט ──
+app.get('/api/test', async (req, res) => {
+  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  try {
+    const chatId = process.env.GROUP_ID;
+    const text = '🧪 טסט מהבוט — ' + new Date().toLocaleTimeString('he-IL');
+    const sent = await waSocket.sendMessage(chatId, { text });
+    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: text };
+    res.json({ success: true, messageId: sent.key.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/groups', async (req, res) => {
