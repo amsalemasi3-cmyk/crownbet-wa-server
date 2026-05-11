@@ -701,9 +701,6 @@ body::before {
             <div class="test-title">🧪 אזור בדיקות</div>
             <button class="btn btn-test" onclick="testWA()">📡 בדוק חיבור WhatsApp</button>
             <button class="btn btn-test" onclick="testSendMsg()" style="margin-top:4px">📨 שלח הודעת טסט לקבוצה</button>
-            <button class="btn btn-test" onclick="testDirect()" style="margin-top:4px;background:rgba(46,204,113,0.15);border-color:rgba(46,204,113,0.4);color:#2ecc71">🚀 טסט ישיר מהבוט</button>
-            <button class="btn btn-test" onclick="loadGroups()" id="loadGroupsBtn" style="margin-top:4px">📋 טען רשימת קבוצות</button>
-            <select id="groupSelect" onchange="selectGroup()" style="display:none;width:100%;padding:10px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:Rubik,sans-serif;margin-top:8px;direction:rtl"></select>
           </div>
         </div>
       </div>
@@ -737,8 +734,6 @@ let allRaffles = [];
 let selected = null;
 let sentHistory = JSON.parse(localStorage.getItem('cb_history') || '[]');
 let config = JSON.parse(localStorage.getItem('cb_config') || '{"groupId":"120363408842381633@g.us","server":"https://crownbet-wa-server-production.up.railway.app"}');
-// תמיד וודא שהשרת נכון
-config.server = 'https://crownbet-wa-server-production.up.railway.app';
 
 // ── INIT ──
 loadConfig();
@@ -751,7 +746,7 @@ async function checkWAStatus() {
     const r = await fetch(`${config.server}/api/status`);
     const d = await r.json();
     const el = document.getElementById('waStatus');
-    if (d.connected) {
+    if (d.ready) {
       el.innerHTML = '<div class="status-dot"></div>WA מחובר ✓';
       el.style.color = 'var(--green)';
     } else {
@@ -940,7 +935,7 @@ async function testWA() {
   try {
     const r = await fetch(`${config.server}/api/status`);
     const d = await r.json();
-    showToast(d.connected ? '✅ WhatsApp מחובר!' : '❌ לא מחובר', d.connected ? 'success' : 'error');
+    showToast(d.ready ? '✅ WhatsApp מחובר!' : '❌ לא מחובר', d.ready ? 'success' : 'error');
   } catch { showToast('❌ לא מצליח להתחבר לשרת', 'error'); }
 }
 
@@ -964,38 +959,6 @@ function switchTab(name, btn) {
   selected = null;
   document.getElementById('previewContent').innerHTML = `<div class="no-select"><div style="font-size:40px;opacity:0.3">👆</div><span>בחר הגרלה מהרשימה</span></div>`;
   if (name === 'history') renderHistory();
-}
-
-async function loadGroups() {
-  const btn = document.getElementById('loadGroupsBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ טוען...'; }
-  try {
-    const r = await fetch(`${config.server}/api/groups`);
-    const groups = await r.json();
-    const sel = document.getElementById('groupSelect');
-    if (sel && Array.isArray(groups)) {
-      sel.innerHTML = '<option value="">-- בחר קבוצה --</option>' + groups.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
-      sel.style.display = 'block';
-      showToast(`✅ נמצאו ${groups.length} קבוצות`, 'success');
-    }
-  } catch(e) { showToast('❌ שגיאה בטעינת קבוצות', 'error'); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = '📋 טען רשימת קבוצות'; } }
-}
-
-function selectGroup() {
-  const sel = document.getElementById('groupSelect');
-  if (!sel || !sel.value) return;
-  document.getElementById('cfgGroupId').value = sel.value;
-  showToast('✅ קבוצה נבחרה — לחץ שמור הגדרות', 'success');
-}
-
-async function testDirect() {
-  try {
-    const r = await fetch(`${config.server}/api/test`);
-    const d = await r.json();
-    if (d.success) showToast('✅ הודעת טסט נשלחה ישירות!', 'success');
-    else showToast('❌ ' + (d.error || 'שגיאה'), 'error');
-  } catch(e) { showToast('❌ שגיאה: ' + e.message, 'error'); }
 }
 
 let toastTimer;
