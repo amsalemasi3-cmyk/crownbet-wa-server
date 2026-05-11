@@ -1,16 +1,18 @@
 const cron = require('node-cron');
 const axios = require('axios');
 const {
-  GROUP_ID, morningMessages, afterRaffleMessages, 
+  morningMessages, afterRaffleMessages, 
   weekdayNoon, weekdayAfternoon, weekdayEvening,
   weekdayLateEvening, weekdayMidnight, lateNightMessages, 
   veryLateNightMessages, weekendMessages, motzashMessages,
   getRandom, randomDelay, isWeekend, isMoatzash
 } = require('./messages');
 
+const GROUP_ID = process.env.GROUP_ID;
+
 const SUPABASE_URL = 'https://oxraakhcpvthlvjvapay.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94cmFha2hjcHZ0aGx2anZhcGF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzY4MTUsImV4cCI6MjA5MzY1MjgxNX0.dftK8Qb9zjzwEVGRLv4Q54Pqn2SLrzOxUqydIYf3Xd8';
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:8080';
 
 // ── האם עכשיו שבת? ──
 function isShabbat() {
