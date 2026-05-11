@@ -28,6 +28,21 @@ const msgStore = new Map();
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
 
+// ✅ מאגר LID: שומר מיפוי בין מספר טלפון ל-LID של iOS
+const lidMap = new Map();
+
+// ✅ פונקציה שמחזירה את ה-JID הנכון לפני שליחה
+function resolveJid(jid) {
+  if (!jid) return jid;
+  const normalized = jid.includes('@') ? jid.toLowerCase() : `${jid}@s.whatsapp.net`;
+  const lid = lidMap.get(normalized);
+  if (lid) {
+    console.log(`🔄 LID resolved: ${normalized} → ${lid}`);
+    return lid;
+  }
+  return normalized;
+}
+
 async function startBaileys() {
   if (isConnecting) return;
   isConnecting = true;
@@ -46,7 +61,7 @@ async function startBaileys() {
       browser: ['Ubuntu', 'Chrome', '20.0.04'],
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: undefined, // ✅ מונע סגירת session מוקדמת
       keepAliveIntervalMs: 10_000,
       generateHighQualityLinkPreview: true,
       getMessage: async (key) => {
@@ -57,9 +72,27 @@ async function startBaileys() {
 
     sock.ev.on('messages.upsert', ({ messages }) => {
       for (const msg of messages) {
+        // ✅ שמור הודעה ב-store
         if (msg.key?.id && msg.message) {
           msgStore.set(msg.key.id, msg.message);
           setTimeout(() => msgStore.delete(msg.key.id), 24 * 60 * 60 * 1000);
+        }
+
+        // ✅ שמור מיפוי LID ← מספר טלפון (לתיקון בעיית iOS)
+        if (msg.key?.remoteJid?.includes('@lid') && msg.key?.senderPn) {
+          const pn = `${msg.key.senderPn}@s.whatsapp.net`;
+          if (!lidMap.has(pn)) {
+            lidMap.set(pn, msg.key.remoteJid);
+            console.log(`📱 LID mapping נשמר: ${pn} → ${msg.key.remoteJid}`);
+          }
+        }
+
+        // ✅ מיפוי נוסף דרך previousRemoteJid
+        if (msg.key?.previousRemoteJid?.includes('@lid') && msg.key?.remoteJid?.includes('@s.whatsapp.net')) {
+          if (!lidMap.has(msg.key.remoteJid)) {
+            lidMap.set(msg.key.remoteJid, msg.key.previousRemoteJid);
+            console.log(`📱 LID mapping (prev) נשמר: ${msg.key.remoteJid} → ${msg.key.previousRemoteJid}`);
+          }
         }
       }
     });
@@ -166,7 +199,7 @@ app.get('/qr', (req, res) => {
 app.get('/api/test', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   try {
-    const chatId = process.env.GROUP_ID;
+    const chatId = resolveJid(process.env.GROUP_ID);
     const text = '🧪 טסט מהבוט — ' + new Date().toLocaleTimeString('he-IL');
     const sent = await waSocket.sendMessage(chatId, { text });
     if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: text });
@@ -191,7 +224,8 @@ app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
   try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
+    const resolvedId = resolveJid(chatId);
+    const sent = await waSocket.sendMessage(resolvedId, { text: content });
     if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
@@ -203,7 +237,8 @@ app.post('/api/sendTextWithId', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content, raffleId } = req.body;
   try {
-    const sent = await waSocket.sendMessage(chatId, { text: content });
+    const resolvedId = resolveJid(chatId);
+    const sent = await waSocket.sendMessage(resolvedId, { text: content });
     if (sent?.key?.id) msgStore.set(sent.key.id, { conversation: content });
     if (raffleId) raffleMessages[raffleId] = sent.key.id;
     res.json({ success: true, messageId: sent.key.id });
@@ -216,9 +251,10 @@ app.post('/api/sendImage', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, url, caption, raffleId } = req.body;
   try {
+    const resolvedId = resolveJid(chatId);
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data);
-    const sent = await waSocket.sendMessage(chatId, { image: buffer, caption: caption || '' });
+    const sent = await waSocket.sendMessage(resolvedId, { image: buffer, caption: caption || '' });
     if (raffleId) raffleMessages[raffleId] = sent.key.id;
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
