@@ -1,7 +1,62 @@
+const express = require('express');
+const cors = require('cors');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const qrcode = require('qrcode');
+
+const app = express();
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
+let waClient = null;
+let isReady = false;
+let currentQR = null;
+
+const raffleMessages = {};
+
+const client = new Client({
+  authStrategy: new LocalAuth({ clientId: process.env.WA_SESSION || 'crownbet' }),
+  puppeteer: {
+    headless: true,
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+           '--disable-accelerated-2d-canvas','--no-first-run','--no-zygote',
+           '--single-process','--disable-gpu']
+  }
+});
+
+client.on('qr', async (qr) => {
+  console.log('📱 QR מוכן — כנס ל /qr');
+  currentQR = await qrcode.toDataURL(qr);
+});
+
+client.on('ready', () => {
+  console.log('✅ WhatsApp מחובר!');
+  isReady = true;
+  waClient = client;
+  currentQR = null;
+  require('./scheduler');
+});
+
+client.on('disconnected', () => {
+  console.log('WhatsApp התנתק');
+  isReady = false;
+  waClient = null;
+});
+
+client.initialize();
+
+app.get('/', (req, res) => res.redirect('/qr'));
+
+app.get('/qr', (req, res) => {
+  if (isReady) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}.ok{background:#0f2a1a;border:2px solid #22c55e;border-radius:12px;padding:2rem;display:inline-block;color:#22c55e;font-size:1.3rem;margin-top:1rem}</style></head><body><h1>👑 CrownBet WA Server</h1><div class="ok">✅ WhatsApp מחובר ומוכן לשליחה!<br><small style="font-size:14px;margin-top:8px;display:block">התזמון האוטומטי פעיל 📅</small></div></body></html>`);
+  if (currentQR) return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>סרוק QR</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:2rem}h1{color:#f5c842}img{border:4px solid #f5c842;border-radius:12px;max-width:300px;margin-top:1rem}</style></head><body><h1>👑 CrownBet — סרוק QR</h1><p style="color:#7070a0">וואטסאפ → שלוש נקודות ⋮ → מכשירים מקושרים → סרוק</p><br><img src="${currentQR}" /></body></html>`);
+  return res.send(`<html dir="rtl"><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>CrownBet</title><style>body{background:#0a0a0f;color:#f0f0f5;font-family:sans-serif;text-align:center;padding:3rem}h1{color:#f5c842}</style></head><body><h1>👑 CrownBet WA Server</h1><p style="color:#7070a0">⏳ מאתחל...</p></body></html>`);
+});
+
 app.get('/api/status', (req, res) => res.json({ ready: isReady, hasQR: !!currentQR }));
 app.get('/api/getSessionInfo', (req, res) => res.json({ ready: isReady }));
 
-// ── פונקציה עזר: הכן צ'אט לפני שליחה ──
 // ── פונקציה עזר: הכן צ'אט ──
 async function prepareChat(chatId) {
   try {
@@ -9,20 +64,17 @@ async function prepareChat(chatId) {
     await chat.sendSeen();
     return chat;
   } catch (err) {
-    console.log('prepareChat error (non-critical):', err.message);
     console.log('prepareChat error:', err.message);
     return null;
   }
 }
 
-// ── שלח טקסט ──
 // ── שלח טקסט עם אפשרויות מלאות ──
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
   try {
     await prepareChat(chatId);
-    const sentMsg = await waClient.sendMessage(chatId, content);
     const sentMsg = await waClient.sendMessage(chatId, content, {
       isViewOnce: false,
       forwardingScore: 0,
@@ -30,25 +82,34 @@ app.post('/api/sendText', async (req, res) => {
     res.json({ success: true, messageId: sentMsg.id._serialized });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-@@ -87,9 +90,11 @@
+
+// ── שלח תמונה + שמור messageId ──
+app.post('/api/sendImage', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  const { chatId, url, caption, raffleId } = req.body;
   try {
     await prepareChat(chatId);
     const media = await MessageMedia.fromUrl(url, { unsafeMime: true });
-    const sentMsg = await waClient.sendMessage(chatId, media, { 
     const sentMsg = await waClient.sendMessage(chatId, media, {
       caption: caption || '',
-      sendMediaAsDocument: false
       sendMediaAsDocument: false,
       isViewOnce: false,
       forwardingScore: 0,
     });
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
-@@ -105,7 +110,10 @@
+      console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
+    }
+    res.json({ success: true, messageId: sentMsg.id._serialized });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── שלח טקסט + שמור messageId ──
+app.post('/api/sendTextWithId', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content, raffleId } = req.body;
   try {
     await prepareChat(chatId);
-    const sentMsg = await waClient.sendMessage(chatId, content);
     const sentMsg = await waClient.sendMessage(chatId, content, {
       isViewOnce: false,
       forwardingScore: 0,
@@ -56,12 +117,21 @@ app.post('/api/sendText', async (req, res) => {
     if (raffleId) {
       raffleMessages[raffleId] = sentMsg.id._serialized;
       console.log(`💾 נשמר messageId להגרלה ${raffleId}`);
-@@ -124,52 +132,52 @@
+    }
+    res.json({ success: true, messageId: sentMsg.id._serialized });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── שלוף תגובות על הודעה ──
+app.get('/api/getMessageReplies', async (req, res) => {
+  if (!isReady || !waClient) return res.status(503).json({ error: 'לא מחובר' });
+  const { messageId } = req.query;
+  if (!messageId) return res.status(400).json({ error: 'חסר messageId' });
+  try {
+    const GROUP_ID = process.env.GROUP_ID;
     const chat = await waClient.getChatById(GROUP_ID);
     const messages = await chat.fetchMessages({ limit: 1000 });
     const replies = messages.filter(m => {
-      return m._data && m._data.quotedStanzaID && 
-             (m._data.quotedStanzaID === messageId || 
       return m._data && m._data.quotedStanzaID &&
              (m._data.quotedStanzaID === messageId ||
               messageId.includes(m._data.quotedStanzaID));
