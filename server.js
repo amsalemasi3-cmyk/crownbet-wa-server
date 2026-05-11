@@ -146,6 +146,21 @@ app.get('/qr', (req, res) => {
   `);
 });
 
+// ── רשימת קבוצות (לאיתור chatId) ──
+app.get('/api/groups', async (req, res) => {
+  if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
+  try {
+    const groups = await waSocket.groupFetchAllParticipating();
+    const list = Object.values(groups).map(g => ({
+      id: g.id,
+      name: g.subject
+    }));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/sendText', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   const { chatId, content } = req.body;
