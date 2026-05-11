@@ -3,7 +3,6 @@ const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
-const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const {
   default: makeWASocket,
@@ -17,7 +16,6 @@ app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders:
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-const PROXY = process.env.WA_PROXY;
 
 let waSocket = null;
 let isReady = false;
@@ -26,10 +24,6 @@ let isConnecting = false;
 
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
-
-// ── Proxy Agent ──
-const proxyAgent = PROXY ? new HttpsProxyAgent(PROXY) : null;
-console.log(proxyAgent ? `🌐 Proxy פעיל: ${PROXY.split('@')[1]}` : '⚠️ אין Proxy — IP ישיר');
 
 async function startBaileys() {
   if (isConnecting) return;
@@ -42,15 +36,11 @@ async function startBaileys() {
     const sock = makeWASocket({
       logger,
       auth: state,
-      browser: Browsers.ubuntu('Chrome'),
+      browser: Browsers.macOS('Safari'),
       syncFullHistory: false,
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
-      ...(proxyAgent && {
-        agent: proxyAgent,
-        fetchAgent: proxyAgent,
-      }),
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -114,7 +104,7 @@ startBaileys();
 app.get('/', (req, res) => res.redirect('/qr'));
 
 app.get('/status', (req, res) => {
-  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting, proxy: !!proxyAgent });
+  res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
 });
 
 app.get('/qr', (req, res) => {
