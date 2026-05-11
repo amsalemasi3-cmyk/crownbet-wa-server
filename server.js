@@ -3,6 +3,7 @@ const cors = require('cors');
 const qrcode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
+const path = require('path');
 
 const {
   default: makeWASocket,
@@ -20,6 +21,9 @@ let waSocket = null;
 let isReady = false;
 let currentQR = null;
 let isConnecting = false;
+
+// שמירת הודעות אחרונות לצורך getMessage
+const msgStore = {};
 
 const raffleMessages = {};
 const logger = pino({ level: 'silent' });
@@ -40,6 +44,20 @@ async function startBaileys() {
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 60_000,
       keepAliveIntervalMs: 10_000,
+      generateHighQualityLinkPreview: true,
+      // ← תיקון "בהמתנה להודעה"
+      getMessage: async (key) => {
+        const id = key.id;
+        if (msgStore[id]) return msgStore[id];
+        return { conversation: '' };
+      },
+    });
+
+    // שמור הודעות יוצאות ל-store
+    sock.ev.on('messages.upsert', ({ messages }) => {
+      for (const msg of messages) {
+        if (msg.key?.id) msgStore[msg.key.id] = msg.message;
+      }
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -102,6 +120,10 @@ startBaileys();
 
 app.get('/', (req, res) => res.redirect('/qr'));
 
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'panel.html'));
+});
+
 app.get('/status', (req, res) => {
   res.json({ connected: isReady, hasQR: !!currentQR, isConnecting });
 });
@@ -146,15 +168,11 @@ app.get('/qr', (req, res) => {
   `);
 });
 
-// ── רשימת קבוצות (לאיתור chatId) ──
 app.get('/api/groups', async (req, res) => {
   if (!isReady || !waSocket) return res.status(503).json({ error: 'לא מחובר' });
   try {
     const groups = await waSocket.groupFetchAllParticipating();
-    const list = Object.values(groups).map(g => ({
-      id: g.id,
-      name: g.subject
-    }));
+    const list = Object.values(groups).map(g => ({ id: g.id, name: g.subject }));
     res.json(list);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -166,6 +184,7 @@ app.post('/api/sendText', async (req, res) => {
   const { chatId, content } = req.body;
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
+    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: content };
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -177,6 +196,7 @@ app.post('/api/sendTextWithId', async (req, res) => {
   const { chatId, content, raffleId } = req.body;
   try {
     const sent = await waSocket.sendMessage(chatId, { text: content });
+    if (sent?.key?.id) msgStore[sent.key.id] = { conversation: content };
     if (raffleId) raffleMessages[raffleId] = sent.key.id;
     res.json({ success: true, messageId: sent.key.id });
   } catch (err) {
