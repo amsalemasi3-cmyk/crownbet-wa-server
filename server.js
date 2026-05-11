@@ -37,6 +37,7 @@ async function startBaileys() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
+      version: [2, 3000, 1027934701], // ✅ תיקון שגיאת 405
       logger,
       auth: {
         creds: state.creds,
